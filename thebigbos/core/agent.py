@@ -488,28 +488,33 @@ class BigBosAgent:
             self.state.step_count += 1
 
             try:
-                # Use provider streaming for real-time text display
-                full_text = ""
-                async for token in provider.stream_chat(session.to_llm_format(), tool_schemas, options):
-                    full_text += token
-                    yield token  # Stream each chunk to TUI
-
-                # After stream, check if we need tool calls via non-streaming call
-                if not full_text.strip():
-                    # Streaming didn't return text — might be tool calls, try non-streaming
-                    response = await provider.chat(session.to_llm_format(), tool_schemas, options)
-                    if response.tool_calls:
-                        full_text = response.content or ""
-                    else:
-                        break
-                else:
-                    # Text response done, no need for tool check
-                    self.memory.save_message(session.id, "assistant", full_text)
-                    session.add_message(Message(role="assistant", content=full_text))
-                    break
+                response = await provider.chat(session.to_llm_format(), tool_schemas, options)
             except Exception as e:
                 yield f"\n[Error: {e}]"
                 break
+
+            if response.reasoning_content:
+                yield f"\n[dim]thinking: {response.reasoning_content[:300]}...[/dim]\n"
+
+            if response.content:
+                yield response.content
+                self.memory.save_message(session.id, "assistant", response.content)
+
+            assistant_msg = Message(
+                role="assistant",
+                content=response.content,
+                tool_calls=response.tool_calls,
+            )
+            session.add_message(assistant_msg)
+
+            if not response.tool_calls:
+                break
+
+            for tc in response.tool_calls:
+                yield f"\n[dim]Tool: {tc.name}...[/dim]\n"
+                result = await self.tools.execute(tc.name, tc.arguments)
+                self.memory.save_message(session.id, "tool", result, tool_call_id=tc.id, name=tc.name)
+                session.add_message(Message(role="tool", content=result, tool_call_id=tc.id, name=tc.name))
 
         if not session.title:
             session.title = user_input[:50] + ("..." if len(user_input) > 50 else "")

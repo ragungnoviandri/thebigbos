@@ -117,11 +117,12 @@ class OpencodeGoProvider(ModelProvider):
                             chunk = json.loads(data_str)
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
                             content = delta.get("content", "")
-                            reasoning = delta.get("reasoning_content", "")
-                            if reasoning:
-                                yield f"[reasoning]{reasoning}"
                             if content:
                                 yield content
+                            # Some reasoning models put text in reasoning_content, not content
+                            reasoning = delta.get("reasoning_content", "")
+                            if reasoning and not content:
+                                pass  # Don't yield reasoning — it's internal thinking
                         except json.JSONDecodeError:
                             continue
         except Exception as e:
