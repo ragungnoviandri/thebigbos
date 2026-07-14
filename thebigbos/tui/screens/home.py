@@ -67,6 +67,8 @@ class ChatInput(TextArea):
             text = self.text.strip()
             if text:
                 self.clear()
+                # Re-focus immediately so cursor is ready
+                self.focus()
                 # Call screen handler directly
                 screen = self.screen
                 if hasattr(screen, '_handle_chat_input'):
@@ -508,6 +510,7 @@ class HomeScreen(Screen[Any]):
         ("ctrl+c", "copy_text", "Copy"),
         ("ctrl+r", "rename_session", "Rename Session"),
         ("ctrl+m", "show_models", "Models"),
+        ("tab", "toggle_mode", "Toggle Plan/Build"),
         ("escape", "focus_prompt", "Focus ChatInput"),
     ]
 
@@ -560,6 +563,12 @@ class HomeScreen(Screen[Any]):
                     yield Button("+", variant="success", id="add-provider-sidebar-btn", classes="icon-btn")
                 yield Label("[bold cyan]Model[/bold cyan]", id="sidebar-model-label")
                 yield Select([], id="model-select", prompt="Model...")
+
+                # Mode toggle: Plan / Build
+                yield Label("[bold cyan]Mode[/bold cyan]", id="sidebar-mode-label")
+                with Horizontal(id="mode-controls"):
+                    yield Button("📋 Plan", variant="default", id="mode-plan-btn", classes="mode-btn")
+                    yield Button("🔨 Build", variant="primary", id="mode-build-btn", classes="mode-btn")
 
                 yield SidebarWidget(id="sidebar-info")
 
@@ -890,6 +899,8 @@ class HomeScreen(Screen[Any]):
             self._thinking = False
             response_area.write("\n[dim green]✓[/dim green]")
             self._update_sidebar()
+            # Re-focus chat input so user can type immediately
+            self.query_one("#prompt-input", ChatInput).focus()
 
         elif event_type == "tool_executing":
             try:
@@ -1112,6 +1123,7 @@ class HomeScreen(Screen[Any]):
 
         if text.startswith("/"):
             await self._handle_command(text)
+            self.query_one("#prompt-input", ChatInput).focus()
             return
 
         response_area.write(f"\n[bold yellow]You:[/bold yellow] {text}\n")
@@ -1122,6 +1134,9 @@ class HomeScreen(Screen[Any]):
             self._tool_log = []
             self._update_sidebar()
             self._chat_task = asyncio.create_task(self._run_chat(text))
+
+        # Always re-focus chat input after sending
+        self.query_one("#prompt-input", ChatInput).focus()
 
     @on(Button.Pressed, "#send-btn")
     async def _on_send_btn(self) -> None:
@@ -1370,6 +1385,8 @@ class HomeScreen(Screen[Any]):
             self._thinking = False
             sidebar.error_msg = ""
             self._update_sidebar()
+            # Ensure focus returns to input
+            self.query_one("#prompt-input", ChatInput).focus()
 
     async def _handle_command(self, cmd: str) -> None:
         """Handle slash commands."""
@@ -1562,12 +1579,11 @@ class HomeScreen(Screen[Any]):
         status_bar.mode = sidebar.mode
         status_bar.thinking = self._thinking
 
-        # Determine mode
-        model_lower = self.agent.config.active_model.lower()
-        if any(m in model_lower for m in ("o1", "o3", "o4", "r1", "thinking")):
-            sidebar.mode = "plan"
-        else:
-            sidebar.mode = "build"
+        # Determine mode — use config mode, not model name
+        sidebar.mode = self.agent.config.mode
+
+        # Update mode button visuals
+        self._update_mode_buttons()
 
         # Token estimate
         provider = self.agent.providers.active

@@ -444,9 +444,12 @@ class BigBosAgent:
         self.state.step_count = 0
         self.state.messages = []
 
-        # Build system prompt
+        # Always refresh system prompt so mode changes take effect
         system_prompt = self._build_system_prompt()
-        session.add_message(Message(role="system", content=system_prompt))
+        if session.messages and session.messages[0].role == "system":
+            session.messages[0] = Message(role="system", content=system_prompt)
+        else:
+            session.messages.insert(0, Message(role="system", content=system_prompt))
 
         # Inject relevant memories
         try:
@@ -572,8 +575,12 @@ class BigBosAgent:
 
         self._emit("thinking", "")
 
+        # Always refresh system prompt so mode changes take effect
         system_prompt = self._build_system_prompt()
-        session.add_message(Message(role="system", content=system_prompt))
+        if session.messages and session.messages[0].role == "system":
+            session.messages[0] = Message(role="system", content=system_prompt)
+        else:
+            session.messages.insert(0, Message(role="system", content=system_prompt))
 
         session.add_message(Message(role="user", content=user_input))
         self.memory.save_message(session.id, "user", user_input)
@@ -673,6 +680,24 @@ class BigBosAgent:
 
         skills_prompt = self.skills.get_skill_prompt()
 
+        # Mode-dependent tool constraints
+        if self.config.mode == "plan":
+            mode_rule = (
+                "\n\n## Mode: PLAN (read-only)\n"
+                "You are in **plan mode**. You can read files, search code, browse the web, "
+                "and have conversations. You can suggest changes and provide code examples, "
+                "but you **cannot write, edit, or execute** any files.\n"
+                "- Use `read`, `glob`, `grep`, `webfetch` freely\n"
+                "- You can suggest edits but the user must apply them manually\n"
+                "- Be helpful, conversational, and thorough in your analysis"
+            )
+        else:
+            mode_rule = (
+                "\n\n## Mode: BUILD (read/write)\n"
+                "You are in **build mode**. Full access — read, write, edit, execute, "
+                "and delegate to subagents. Build with swagger."
+            )
+
         tools_prompt = "\n\n## Available Tools\n"
         for t in self.tools.get_all():
             tools_prompt += f"\n- **{t.name}**: {t.description}"
@@ -683,7 +708,7 @@ class BigBosAgent:
             for name, agent_cfg in self.config.agents.items():
                 subagent_prompt += f"\n- **{name}**: {agent_cfg.description}"
 
-        extra = f"{skills_prompt}\n{tools_prompt}\n{subagent_prompt}"
+        extra = f"{skills_prompt}\n{mode_rule}\n{tools_prompt}\n{subagent_prompt}"
         return self.soul.build_system_prompt(extra_context=extra, facts=facts_text)
 
     # ——— Context compaction ———

@@ -157,6 +157,81 @@ class BigBosApp(App[Any]):
         width: 100%;
     }
 
+    #provider-controls {
+        width: 100%;
+        height: auto;
+        align: center middle;
+    }
+
+    #provider-controls Select {
+        width: 1fr;
+    }
+
+    #provider-controls Button {
+        min-width: 4;
+    }
+
+    /* Modal dialog containers */
+    .modal-container {
+        width: 70%;
+        height: auto;
+        max-height: 90%;
+        background: #1a1a2e;
+        border: thick #00d4ff;
+        padding: 1 2;
+        align: center middle;
+    }
+
+    #dialog-title {
+        width: 100%;
+        text-align: center;
+        padding: 1;
+        margin-bottom: 1;
+    }
+
+    #dialog-body {
+        width: 100%;
+        height: auto;
+        padding: 1 0;
+    }
+
+    #dialog-body Label {
+        padding: 0 1;
+        margin-top: 1;
+    }
+
+    #dialog-body Input {
+        width: 100%;
+        margin: 0 1;
+    }
+
+    #dialog-body Select {
+        width: 100%;
+        margin: 0 1;
+    }
+
+    #dialog-actions {
+        width: 100%;
+        height: auto;
+        align: center middle;
+        padding: 1 0;
+        margin-top: 1;
+    }
+
+    #dialog-actions Button {
+        margin: 0 1;
+        min-width: 16;
+    }
+
+    /* Commit dialog specific */
+    #commit-dialog {
+        width: 60%;
+        height: auto;
+        background: #1a1a2e;
+        border: thick #00d4ff;
+        padding: 1 2;
+    }
+
     /* Dialog styling */
     DialogAlert > Center,
     DialogConfirm > Center,

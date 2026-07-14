@@ -70,6 +70,7 @@ class Config(BaseModel):
     reasoning_budget: int = 16000
     auto_approve: bool = False
     snapshot: bool = True
+    mode: str = "build"  # "plan" = read-only suggestions, "build" = full read/write
 
 
 DEFAULT_CONFIG = Config(
