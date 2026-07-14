@@ -57,4 +57,5 @@ class TodoTool:
                 "required": ["todos"],
             },
             handler=_todos,
+            read_only=True,  # only modifies in-memory state, safe for PLAN mode
         )

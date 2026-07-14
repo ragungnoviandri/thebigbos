@@ -63,6 +63,9 @@ class BigBosAgent:
         """Async initialization — load providers, register tools, scan skills."""
         await self.providers.initialize()
 
+        # Set tool registry mode from config
+        self.tools.mode = self.config.mode
+
         # Register built-in tools
         from ..tools.bash_tool import BashTool
         from ..tools.file_tools import ReadTool, WriteTool, EditTool, GlobTool, GrepTool
@@ -200,6 +203,7 @@ class BigBosAgent:
                 "required": ["name"],
             },
             handler=_load_skill,
+            read_only=True,
         )
 
     def on_event(self, callback: Callable[[str, str], None]) -> None:

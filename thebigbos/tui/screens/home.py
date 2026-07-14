@@ -1743,6 +1743,8 @@ class HomeScreen(Screen[Any]):
         current = self.agent.config.mode
         new_mode = "build" if current == "plan" else "plan"
         self.agent.config.mode = new_mode
+        # Propagate to tool registry — hard-blocks write tools in PLAN mode
+        self.agent.tools.mode = new_mode
         self._update_mode_buttons()
         self._update_sidebar()
         self.notify(f"Mode: {new_mode.upper()} — {'read/write' if new_mode == 'build' else 'read-only'}")
