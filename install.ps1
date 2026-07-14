@@ -89,13 +89,11 @@ Write-Host "  Dependencies installed" -ForegroundColor Green
 
 # 6. Create wrapper script
 Write-Host "[6/7] Creating wrapper..." -ForegroundColor Yellow
-$wrapper = @"
+# Create wrapper using venv executable directly
+@"
 @echo off
-set TB_HOME=$InstallDir
-call "%TB_HOME%\venv\Scripts\activate.bat" >nul
-python -m thebigbos %*
-"@
-Set-Content -Path "$InstallDir\bin\thebigbos.bat" -Value $wrapper
+"$InstallDir\venv\Scripts\thebigbos.exe" %*
+"@ | Set-Content -Path "$InstallDir\bin\thebigbos.bat"
 Set-Content -Path "$InstallDir\bin\thebigbos.ps1" -Value "& `"$InstallDir\venv\Scripts\python.exe`" -m thebigbos @args"
 
 # Symlink to user bin
