@@ -126,33 +126,36 @@ class Updater:
         if not self.repo_path:
             return False
         try:
+            # Record pre-pull commit for dependency check
+            pyproject_before = (self.repo_path / "pyproject.toml").read_text() if (self.repo_path / "pyproject.toml").exists() else ""
+
             # Show what's changed
             if show_output:
-                subprocess.run(
-                    ["git", "-C", str(self.repo_path), "fetch", "origin"],
-                    timeout=15
-                )
-                subprocess.run(
-                    ["git", "-C", str(self.repo_path), "log", "HEAD..origin/main", "--oneline"],
-                    timeout=10
-                )
+                subprocess.run(["git", "-C", str(self.repo_path), "fetch", "origin"], timeout=15)
+                subprocess.run(["git", "-C", str(self.repo_path), "log", "HEAD..origin/main", "--oneline"], timeout=10)
 
             result = subprocess.run(
                 ["git", "-C", str(self.repo_path), "pull", "origin", "main"],
                 capture_output=not show_output, text=True, timeout=30
             )
-            if not show_output:
-                if "Already up to date" in (result.stdout or ""):
-                    return False
+            if not show_output and "Already up to date" in (result.stdout or ""):
+                return False
 
-            # Reinstall deps if needed
-            venv = self.repo_path.parent / "venv"
-            pip = venv / "bin" / "pip" if os.name != "nt" else venv / "Scripts" / "pip.exe"
-            if pip.exists():
-                subprocess.run(
-                    [str(pip), "install", "-e", str(self.repo_path), "--quiet"],
-                    timeout=60
-                )
+            # Only reinstall deps if pyproject.toml changed
+            pyproject_after = (self.repo_path / "pyproject.toml").read_text() if (self.repo_path / "pyproject.toml").exists() else ""
+            if pyproject_before != pyproject_after:
+                if show_output:
+                    print("\n  Dependencies changed. Reinstalling...")
+                venv = self.repo_path.parent / "venv"
+                pip = venv / "bin" / "pip" if os.name != "nt" else venv / "Scripts" / "pip.exe"
+                if pip.exists():
+                    subprocess.run([str(pip), "install", "-e", str(self.repo_path), "--quiet"], timeout=60)
+                if show_output:
+                    print("  Done! Restart thebigbos to apply deps changes.")
+            else:
+                if show_output:
+                    print("\n  Code-only update. Already applied (editable install).")
+
             return True
         except Exception:
             return False
