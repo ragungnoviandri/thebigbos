@@ -101,6 +101,20 @@ class BigBosApp(App[Any]):
         margin-bottom: 0;
     }
 
+    /* Build mode (blue) */
+    .mode-build {
+        background: #0055cc 80%;
+        border: solid #0088ff;
+        color: #ffffff;
+    }
+
+    /* Plan mode (orange) */
+    .mode-plan {
+        background: #cc5500 80%;
+        border: solid #ff8800;
+        color: #ffffff;
+    }
+
     #prompt-input {
         width: 1fr;
         height: auto;
@@ -244,9 +258,14 @@ class BigBosApp(App[Any]):
         height: auto;
         min-height: 14;
         background: #0f0f23 95%;
-        border: thick #00d4ff;
+        border: thick #0088ff;
         padding: 2 3;
         align: center middle;
+    }
+
+    /* Commit dialog in Plan mode */
+    #commit-dialog.mode-plan {
+        border: thick #ff8800;
     }
 
     #commit-msg-input {

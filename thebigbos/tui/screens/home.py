@@ -1191,13 +1191,15 @@ class HomeScreen(Screen[Any]):
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         
         class CommitMessageDialog(ModalScreen[None]):
-            def __init__(self, changes_summary: str, fut: asyncio.Future):
+            def __init__(self, changes_summary: str, mode: str, fut: asyncio.Future):
                 super().__init__()
                 self._summary = changes_summary
+                self._mode = mode  # 'build' or 'plan'
                 self._future = fut
 
             def compose(self) -> ComposeResult:
-                with Vertical(id="commit-dialog", classes="modal-container"):
+                mode_class = "mode-build" if self._mode == "build" else "mode-plan"
+                with Vertical(id="commit-dialog", classes=f"modal-container {mode_class}"):
                     yield Label("[bold reverse]  📦 Commit  [/bold reverse]", id="dialog-title")
                     with Vertical(id="dialog-body"):
                         if self._summary:
@@ -1233,7 +1235,8 @@ class HomeScreen(Screen[Any]):
                     self._future.set_result(None)
                     self.dismiss()
 
-        dialog = CommitMessageDialog(summary, future)
+        mode = self.agent.config.mode if self.agent else "build"
+        dialog = CommitMessageDialog(summary, mode, future)
         self.app.push_screen(dialog)
         try:
             return await asyncio.wait_for(future, timeout=300)  # 5 min
@@ -1675,12 +1678,20 @@ class HomeScreen(Screen[Any]):
         self.action_toggle_mode()
 
     def _update_mode_buttons(self) -> None:
-        """Update mode toggle button label to show current mode."""
+        """Update mode toggle button label and color to match current mode."""
         if not self.agent:
             return
         mode = self.agent.config.mode
         btn = self.query_one("#mode-toggle-btn", Button)
         btn.label = mode.upper()
+        
+        # Build = blue (primary), Plan = orange (warning)
+        if mode == "build":
+            btn.remove_class("mode-plan")
+            btn.add_class("mode-build")
+        else:
+            btn.remove_class("mode-build")
+            btn.add_class("mode-plan")
 
     def action_focus_prompt(self) -> None:
         self.query_one("#prompt-input", ChatInput).focus()
