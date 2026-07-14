@@ -111,10 +111,13 @@ if (-not $NoPath) {
     $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     if ($currentPath -notlike "*$userBin*") {
         [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$userBin", "User")
-        Write-Host "  Added $userBin to PATH" -ForegroundColor Green
+        Write-Host "  Added $userBin to PATH (permanent)" -ForegroundColor Green
     } else {
         Write-Host "  Already in PATH" -ForegroundColor Green
     }
+    # Also set for current session so no restart needed
+    $env:Path = "$env:Path;$userBin"
+    Write-Host "  PATH updated for current session" -ForegroundColor Green
 }
 
 # Default config
