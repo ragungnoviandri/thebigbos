@@ -46,6 +46,7 @@ from textual.widgets import (
 
 from ..keymap import KeymapRegistry
 from ...tools.git_utils import GitWorkspace
+from ...config.manager import ProviderConfig
 
 
 class ChatInput(TextArea):
@@ -493,11 +494,6 @@ class AddProviderDialog(ModalScreen[str | None]):
             "default_model": default_model,
         }
         self.dismiss(name)
-    
-    def _on_key(self, event) -> None:
-        """Escape to cancel."""
-        if hasattr(event, 'key') and event.key == "escape":
-            self.dismiss(None)
 
 
 class HomeScreen(Screen[Any]):
@@ -561,7 +557,7 @@ class HomeScreen(Screen[Any]):
                 yield Label("[bold cyan]Provider[/bold cyan]", id="sidebar-provider-label")
                 with Horizontal(id="provider-controls"):
                     yield Select([], id="provider-select", prompt="Provider...")
-                    yield Button("+", variant="success", id="add-provider-btn", classes="icon-btn")
+                    yield Button("+", variant="success", id="add-provider-sidebar-btn", classes="icon-btn")
                 yield Label("[bold cyan]Model[/bold cyan]", id="sidebar-model-label")
                 yield Select([], id="model-select", prompt="Model...")
 
@@ -736,6 +732,47 @@ class HomeScreen(Screen[Any]):
         self.agent.config.active_model = new_model
         self._update_sidebar()
         self.notify(f"Model: {new_model}")
+
+    @on(Button.Pressed, "#add-provider-sidebar-btn")
+    async def _on_add_provider_btn(self) -> None:
+        """Open the Add Provider dialog."""
+        existing = self.agent.providers.list_providers() if self.agent else []
+        dialog = AddProviderDialog(existing)
+        
+        async def on_result(provider_name: str | None):
+            if provider_name is None:
+                return
+            # Get the result data from the dialog
+            data = getattr(dialog, '_result', None)
+            if not data:
+                return
+            
+            name = data["name"]
+            base_url = data["base_url"]
+            api_key = data["api_key"]
+            models = data["models"]
+            default_model = data["default_model"]
+            
+            # Register provider at runtime
+            cfg = ProviderConfig(
+                api_key=api_key,
+                base_url=base_url,
+                models=models,
+                default_model=default_model,
+            )
+            ok = self.agent.providers.register_runtime_provider(name, cfg)
+            if ok:
+                # Switch to new provider
+                self.agent.config.active_provider = name
+                self.agent.config.active_model = default_model
+                self._populate_provider_select()
+                self._populate_model_select(name)
+                self._update_sidebar()
+                self.notify(f"✨ Provider '{name}' added! ({len(models)} models)")
+            else:
+                self.notify(f"Provider '{name}' already registered", severity="warning")
+        
+        self.app.push_screen(dialog, callback=on_result)
 
     async def on_mount(self) -> None:
         """Called when screen is mounted. Initialize agent."""
@@ -1097,7 +1134,7 @@ class HomeScreen(Screen[Any]):
 
     @on(Button.Pressed, "#commit-btn")
     async def _on_commit_btn(self) -> None:
-        """Commit button — stage + commit with auto message."""
+        """Commit button — stage + commit with user-provided message."""
         if not self._git or not self._git.is_repo:
             self.notify("Not a git repository", severity="error")
             return
@@ -1106,18 +1143,90 @@ class HomeScreen(Screen[Any]):
             self.notify("Nothing to commit — working tree clean")
             return
 
-        # Generate commit message from last response or timestamp
-        msg = f"Auto-commit — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        # Show commit message dialog
+        msg_result = await self._prompt_commit_message()
+        if msg_result is None:
+            return  # Cancelled
+
         ok, result = self._git.stage_all()
         if not ok:
             self.notify(f"Stage failed: {result}", severity="error")
             return
-        ok, result = self._git.commit(msg)
+        ok, result = self._git.commit(msg_result)
         if ok:
-            self.notify(f"Committed: {result.splitlines()[0] if result else 'OK'}")
+            short_hash = result.splitlines()[0].strip() if result else "OK"
+            self.notify(f"✅ Committed: {short_hash}")
         else:
             self.notify(f"Commit failed: {result}", severity="error")
         self._update_git_status()
+
+    async def _prompt_commit_message(self) -> str | None:
+        """Show a dialog to enter a commit message. Returns None if cancelled."""
+        import asyncio
+        
+        # Get changes summary
+        summary = ""
+        if self._git:
+            try:
+                files = self._git.status_porcelain()
+                if files:
+                    summary = "Changes:\n" + "\n".join(f"  {f}" for f in files[:15])
+                    if len(files) > 15:
+                        summary += f"\n  ... and {len(files)-15} more"
+            except Exception:
+                pass
+
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        
+        class CommitMessageDialog(ModalScreen[None]):
+            def __init__(self, changes_summary: str, fut: asyncio.Future):
+                super().__init__()
+                self._summary = changes_summary
+                self._future = fut
+
+            def compose(self) -> ComposeResult:
+                with Vertical(id="commit-dialog", classes="modal-container"):
+                    yield Label("[bold reverse]  📦 Commit  [/bold reverse]", id="dialog-title")
+                    with Vertical(id="dialog-body"):
+                        if self._summary:
+                            yield Label(f"[dim]{self._summary}[/dim]")
+                        yield Label("Commit message:")
+                        yield Input(id="commit-msg-input", placeholder="feat: ...")
+                        yield Label("[dim]Enter=Confirm  Esc=Cancel[/dim]")
+                    with Horizontal(id="dialog-actions"):
+                        yield Button("Cancel", variant="default", id="cancel-btn")
+                        yield Button("📦 Commit", variant="primary", id="confirm-commit-btn")
+
+            def on_mount(self) -> None:
+                self.query_one("#commit-msg-input", Input).focus()
+
+            def on_input_submitted(self, event: Input.Submitted) -> None:
+                msg = event.value.strip()
+                if msg:
+                    self._future.set_result(msg)
+                    self.dismiss()
+
+            def on_button_pressed(self, event: Button.Pressed) -> None:
+                if event.button.id == "cancel-btn":
+                    self._future.set_result(None)
+                    self.dismiss()
+                elif event.button.id == "confirm-commit-btn":
+                    msg = self.query_one("#commit-msg-input", Input).value.strip()
+                    if msg:
+                        self._future.set_result(msg)
+                        self.dismiss()
+
+            def _on_key(self, event) -> None:
+                if hasattr(event, 'key') and event.key == "escape":
+                    self._future.set_result(None)
+                    self.dismiss()
+
+        dialog = CommitMessageDialog(summary, future)
+        self.app.push_screen(dialog)
+        try:
+            return await asyncio.wait_for(future, timeout=300)  # 5 min
+        except asyncio.TimeoutError:
+            return None
 
     @on(Button.Pressed, "#push-btn")
     async def _on_push_btn(self) -> None:
