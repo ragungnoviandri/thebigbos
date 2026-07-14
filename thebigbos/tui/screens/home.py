@@ -65,12 +65,11 @@ class ChatInput(TextArea):
 
     def _on_key(self, event) -> None:
         if event.key == "enter":
-            event.stop()
             event.prevent_default()
             text = self.text.strip()
             if text:
-                self.post_message(self.Submitted(text))
                 self.clear()
+                self.post_message(ChatInput.Submitted(text))
         else:
             super()._on_key(event)
 
