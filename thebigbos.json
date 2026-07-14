@@ -34,7 +34,7 @@
       "default_model": "llama3.1"
     },
     "opencode-go": {
-      "api_key": "${OPENCODE_API_KEY}",
+      "api_key": "sk-iPl4liPiYxFEYLxbOK0keIpt9Hk9eCn7p7c9MtmfwieUPf45l1gmFgWyTk0eiZU4",
       "base_url": "https://opencode.ai/zen/go/v1",
       "models": [
         "deepseek-v4-pro",

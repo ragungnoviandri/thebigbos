@@ -500,26 +500,18 @@ class BigBosAgent:
                 yield f"\n[Error: {e}]"
                 break
 
-            # —— Reasoning first (full block, dim italic) ——
+            # —— Reasoning first ——
             if response.reasoning_content:
                 self._emit("reasoning", response.reasoning_content[:500])
-                # Split into sentence-like chunks for gradual reveal
-                chunks = response.reasoning_content.replace("\n", "\n[dim italic]").split(". ")
-                yield "\n[dim italic]"  # open markup
-                for chunk in chunks:
-                    yield chunk + (". " if chunk != chunks[-1] else "")
-                    await asyncio.sleep(0.03)
-                yield "[/dim italic]\n\n"
+                yield f"\n[dim italic]{response.reasoning_content[:500]}...[/dim italic]\n\n"
 
-            # —— Content in paragraph chunks ——
+            # —— Content ——
             if response.content:
                 self.memory.save_message(session.id, "assistant", response.content)
-                paragraphs = response.content.split("\n\n")
-                for para in paragraphs:
-                    yield para
-                    if para != paragraphs[-1]:
-                        yield "\n\n"
-                    await asyncio.sleep(0.02)
+                yield response.content
+            elif not response.reasoning_content:
+                # Neither content nor reasoning — model might have returned empty
+                yield "\n[yellow](empty response from model)[/yellow]\n"
 
             assistant_msg = Message(
                 role="assistant",
@@ -532,7 +524,8 @@ class BigBosAgent:
                 break
 
             for tc in response.tool_calls:
-                yield f"\n\n[dim]🔧 {tc.name}...[/dim]\n"
+                self._emit("tool_executing", json.dumps([{"name": tc.name, "args": tc.arguments}]))
+                yield f"\n[dim]Tool: {tc.name}({json.dumps(tc.arguments)[:60]})...[/dim]\n"
                 result = await self.tools.execute(tc.name, tc.arguments)
                 self.memory.save_message(session.id, "tool", result, tool_call_id=tc.id, name=tc.name)
                 session.add_message(Message(role="tool", content=result, tool_call_id=tc.id, name=tc.name))

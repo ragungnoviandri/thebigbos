@@ -116,12 +116,16 @@ class SidebarWidget(Static):
     auto_approve: reactive[bool] = reactive(False)
     mode: reactive[str] = reactive("build")
     thinking: reactive[bool] = reactive(False)
+    error_msg: reactive[str] = reactive("")
 
     def render(self) -> str:
         lines = []
         lines.append(" Session Info")
         lines.append(" ─────────────")
         lines.append("")
+        if self.error_msg:
+            lines.append(f" [red]Error: {self.error_msg[:60]}[/red]")
+            lines.append("")
         if self.thinking:
             lines.append(" [bold yellow]...thinking...[/bold yellow]")
             lines.append("")
@@ -136,7 +140,6 @@ class SidebarWidget(Static):
         lines.append(f" Provider: {self.provider[:15]}")
         lines.append("")
 
-        # Context usage
         if self.context_tokens > 0:
             ctx_limit = 128000
             pct = min(100, int(self.context_tokens / ctx_limit * 100))
@@ -145,14 +148,10 @@ class SidebarWidget(Static):
             lines.append(f" Usage: {bar} {pct}%")
             lines.append("")
 
-        # Skills
         if self.skill_count:
             lines.append(f" Skills: {self.skill_count}")
-
-        # Auto
         if self.auto_approve:
-            lines.append(" Auto: ON")
-
+            lines.append(" Auto: [yellow]ON[/yellow]")
         return "\n".join(lines)
 
     @staticmethod
@@ -554,16 +553,20 @@ class HomeScreen(Screen[Any]):
     async def _run_chat(self, user_input: str) -> None:
         """Run chat with streaming response — text appears in real-time."""
         response_area = self.query_one("#response-area", ResponseArea)
+        sidebar = self.query_one("#sidebar-info", SidebarWidget)
         try:
             async for chunk in self.agent.stream_chat(user_input):
                 response_area.write(chunk)
         except Exception as e:
-            response_area.write(f"\n[red]Error: {e}[/red]")
+            error = str(e)[:100]
+            response_area.write(f"\n[red]Error: {error}[/red]")
+            sidebar.error_msg = error
         finally:
             self._thinking = False
             elapsed = time.time() - getattr(self, "_chat_start", time.time())
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.elapsed = elapsed
+            sidebar.error_msg = ""
             self._update_sidebar()
 
     async def _handle_command(self, cmd: str) -> None:
