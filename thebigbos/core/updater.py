@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -156,9 +157,50 @@ class Updater:
                 if show_output:
                     print("\n  Code-only update. Already applied (editable install).")
 
+            # Sync skills to global config
+            self._sync_skills(show_output)
+
             return True
         except Exception:
             return False
+
+    def _sync_skills(self, show_output: bool = True) -> None:
+        """Copy bundled skills from repo to global config directory."""
+        repo_skills = self.repo_path / ".bigbos" / "skills"
+        if not repo_skills.exists():
+            return
+
+        config_skills = Path.home() / ".config" / "thebigbos" / "skills"
+        config_skills.mkdir(parents=True, exist_ok=True)
+
+        new_count = 0
+        updated_count = 0
+        for skill_dir in repo_skills.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            skill_name = skill_dir.name
+            dest_dir = config_skills / skill_name
+            if not dest_dir.exists():
+                shutil.copytree(skill_dir, dest_dir)
+                new_count += 1
+            else:
+                # Compare mtime of SKILL.md — copy if source is newer
+                src_skill = skill_dir / "SKILL.md"
+                dst_skill = dest_dir / "SKILL.md"
+                if src_skill.exists() and dst_skill.exists():
+                    if src_skill.stat().st_mtime > dst_skill.stat().st_mtime:
+                        # Remove old & recopy
+                        shutil.rmtree(dest_dir)
+                        shutil.copytree(skill_dir, dest_dir)
+                        updated_count += 1
+                elif src_skill.exists() and not dst_skill.exists():
+                    shutil.copytree(skill_dir, dest_dir)
+                    updated_count += 1
+
+        if show_output and (new_count or updated_count):
+            print(f"\n  Skills synced: +{new_count} new, ~{updated_count} updated -> {config_skills}")
+        elif show_output:
+            print(f"\n  Skills: up to date ({config_skills})")
 
     def get_current_git_ref(self) -> str:
         """Get current git commit short hash."""
