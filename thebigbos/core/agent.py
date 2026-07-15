@@ -375,6 +375,7 @@ class BigBosAgent:
 
     def _load_hermes_session(self, session_id: str, session: Session) -> None:
         """Load messages from Hermes DB for a session."""
+        import sqlite3
         real_id = session_id.replace("hermes-", "")
         for hp in [
             Path.home() / "AppData" / "Local" / "hermes" / "state.db",
