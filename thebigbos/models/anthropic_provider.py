@@ -46,7 +46,28 @@ class AnthropicProvider(ModelProvider):
         if opts.thinking_budget and "sonnet" in opts.model.lower():
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": opts.thinking_budget}
 
-        response = await self.client.messages.create(**kwargs)
+        # ── API Logging (lazy import to avoid circular deps) ──
+        from ..core.api_logger import get_logger
+        logger = get_logger()
+        logger.log_request(
+            provider="anthropic",
+            model=opts.model,
+            method="POST",
+            url=str(self.client.base_url) + "/v1/messages",
+            headers={"x-api-key": "***", "anthropic-version": "2023-06-01"},
+            body={"model": opts.model, "system": system, "messages": formatted,
+                   "max_tokens": opts.max_tokens, "tools": anthropic_tools},
+            call_ref=kwargs,
+        )
+
+        try:
+            response = await self.client.messages.create(**kwargs)
+        except Exception as e:
+            logger.log_response(
+                provider="anthropic", model=opts.model, status_code=0,
+                error=str(e), usage={}, call_ref=kwargs,
+            )
+            return ModelResponse(content=f"[API Error] {e}", finish_reason="error")
 
         tool_calls = []
         text_content = ""
@@ -65,6 +86,22 @@ class AnthropicProvider(ModelProvider):
                 reasoning_content += block.thinking
             elif block.type == "redacted_thinking":
                 reasoning_content += f"[redacted: {block.data}]"
+
+        # ── API Logging ──
+        logger.log_response(
+            provider="anthropic",
+            model=opts.model,
+            status_code=200,
+            body={
+                "content": text_content,
+                "reasoning_content": reasoning_content,
+                "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+            },
+            usage={"input": response.usage.input_tokens if response.usage else 0,
+                   "output": response.usage.output_tokens if response.usage else 0,
+                   "total": (response.usage.input_tokens + response.usage.output_tokens) if response.usage else 0},
+            call_ref=kwargs,
+        )
 
         return ModelResponse(
             content=text_content,

@@ -48,6 +48,19 @@ class OllamaProvider(ModelProvider):
 
         import json
 
+        # ── API Logging (lazy import to avoid circular deps) ──
+        from ..core.api_logger import get_logger
+        logger = get_logger()
+        logger.log_request(
+            provider="ollama",
+            model=opts.model,
+            method="POST",
+            url=f"{self.base_url}/chat/completions",
+            headers={"Authorization": "ollama", "Content-Type": "application/json"},
+            body={"model": opts.model, "messages": formatted,
+                   "max_tokens": min(opts.max_tokens, 2048), "tools": tools},
+        )
+
         try:
             response = await self.client.chat.completions.create(**kwargs)
             choice = response.choices[0]
@@ -61,6 +74,19 @@ class OllamaProvider(ModelProvider):
                         args = {}
                     tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
 
+            # ── API Logging ──
+            logger.log_response(
+                provider="ollama",
+                model=opts.model,
+                status_code=200,
+                body={
+                    "content": choice.message.content or "",
+                    "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+                },
+                usage={},
+                call_ref=kwargs,
+            )
+
             return ModelResponse(
                 content=choice.message.content or "",
                 tool_calls=tool_calls,
@@ -68,6 +94,10 @@ class OllamaProvider(ModelProvider):
                 usage={},
             )
         except Exception as e:
+            logger.log_response(
+                provider="ollama", model=opts.model, status_code=0,
+                error=str(e), usage={}, call_ref=kwargs,
+            )
             return ModelResponse(
                 content=f"[Ollama Error] {e}",
                 finish_reason="error",

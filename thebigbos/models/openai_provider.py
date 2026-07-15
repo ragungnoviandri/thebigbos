@@ -50,9 +50,28 @@ class OpenAIProvider(ModelProvider):
         if opts.reasoning_effort and opts.model.startswith(("o1", "o3", "o4")):
             kwargs["reasoning_effort"] = opts.reasoning_effort
 
+        # ── API Logging (lazy import to avoid circular deps) ──
+        from ..core.api_logger import get_logger
+        logger = get_logger()
+        base = str(self.client.base_url).rstrip("/")
+        logger.log_request(
+            provider="openai",
+            model=opts.model,
+            method="POST",
+            url=f"{base}/chat/completions",
+            headers={"Authorization": "***", "Content-Type": "application/json"},
+            body={"model": opts.model, "messages": formatted,
+                   "max_tokens": opts.max_tokens, "tools": tools},
+            call_ref=kwargs,
+        )
+
         try:
             response = await self.client.chat.completions.create(**kwargs)
         except Exception as e:
+            logger.log_response(
+                provider="openai", model=opts.model, status_code=0,
+                error=str(e), usage={}, call_ref=kwargs,
+            )
             return ModelResponse(
                 content=f"[API Error] {e}",
                 finish_reason="error",
@@ -80,6 +99,24 @@ class OpenAIProvider(ModelProvider):
         reasoning_content = ""
         if hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
             reasoning_content = choice.message.reasoning_content
+
+        # ── API Logging ──
+        logger.log_response(
+            provider="openai",
+            model=opts.model,
+            status_code=200,
+            body={
+                "content": content,
+                "reasoning_content": reasoning_content,
+                "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+            },
+            usage={
+                "input": response.usage.prompt_tokens if response.usage else 0,
+                "output": response.usage.completion_tokens if response.usage else 0,
+                "total": response.usage.total_tokens if response.usage else 0,
+            },
+            call_ref=kwargs,
+        )
 
         return ModelResponse(
             content=content,

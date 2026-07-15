@@ -56,19 +56,43 @@ class OpencodeGoProvider(ModelProvider):
             body["reasoning_effort"] = opts.reasoning_effort
 
         url = f"{self.base_url}/chat/completions"
+
+        # ── API Logging (lazy import to avoid circular deps) ──
+        from ..core.api_logger import get_logger
+        logger = get_logger()
+        safe_headers = {
+            "Authorization": "***",
+            "Content-Type": "application/json",
+        }
+        logger.log_request(
+            provider="opencode-go",
+            model=opts.model,
+            method="POST",
+            url=url,
+            headers=safe_headers,
+            body=body,
+        )
+        body_ref = dict(body)  # reference for elapsed time
+
         try:
             response = await self.client.post(url, json=body)
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            logger.log_response(provider="opencode-go", model=opts.model, status_code=0,
+                               error=f"Timeout: {e}", usage={}, call_ref=body_ref)
             return ModelResponse(
                 content=f"[API Error] Request timed out ({self.config.timeout}s). The provider may be overloaded.",
                 finish_reason="error",
             )
         except httpx.ConnectError as e:
+            logger.log_response(provider="opencode-go", model=opts.model, status_code=0,
+                               error=f"Connect error: {e}", usage={}, call_ref=body_ref)
             return ModelResponse(
                 content=f"[API Error] Cannot connect to {self.base_url}. Check network or API status.",
                 finish_reason="error",
             )
         except Exception as e:
+            logger.log_response(provider="opencode-go", model=opts.model, status_code=0,
+                               error=str(e), usage={}, call_ref=body_ref)
             return ModelResponse(content=f"[API Error] {e}", finish_reason="error")
 
         if response.status_code != 200:
@@ -77,6 +101,9 @@ class OpencodeGoProvider(ModelProvider):
             except Exception:
                 data = {}
             error_msg = data.get("error", {}).get("message", response.text[:300] or str(response.status_code))
+
+            logger.log_response(provider="opencode-go", model=opts.model,
+                               status_code=response.status_code, error=error_msg, usage={}, call_ref=body_ref)
 
             # Classify errors for better user guidance
             if response.status_code == 401:
@@ -125,6 +152,25 @@ class OpencodeGoProvider(ModelProvider):
             tool_calls.append(ToolCall(id=tc.get("id", ""), name=func.get("name", ""), arguments=args))
 
         usage = data.get("usage", {})
+
+        # ── API Logging ──
+        logger.log_response(
+            provider="opencode-go",
+            model=opts.model,
+            status_code=200,
+            body={
+                "content": content,
+                "reasoning_content": reasoning_content,
+                "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+            },
+            usage={
+                "input": usage.get("prompt_tokens", 0),
+                "output": usage.get("completion_tokens", 0),
+                "total": usage.get("total_tokens", 0),
+            },
+            call_ref=body_ref,
+        )
+
         return ModelResponse(
             content=content,
             reasoning_content=reasoning_content,
