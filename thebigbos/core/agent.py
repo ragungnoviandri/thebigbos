@@ -59,6 +59,25 @@ class BigBosAgent:
         self._running = False
         self._tool_approval_queue: asyncio.Queue = asyncio.Queue()
 
+    def _resolve_small_model(self) -> str:
+        """Resolve the small model to use for lightweight tasks.
+
+        Checks if small_model is available on the active provider.
+        If not, falls back to active_model (or first available model).
+        """
+        small = self.config.small_model
+        active_provider = self.config.active_provider
+        provider_cfg = self.config.providers.get(active_provider)
+        if provider_cfg and provider_cfg.models:
+            if small in provider_cfg.models:
+                return small
+            # Fallback: use active_model if it's in the list, else first model
+            if self.config.active_model in provider_cfg.models:
+                return self.config.active_model
+            return provider_cfg.models[0]
+        # No provider config — just return small_model as-is
+        return small or self.config.active_model
+
     async def initialize(self) -> None:
         """Async initialization — load providers, register tools, scan skills."""
         await self.providers.initialize()
@@ -827,7 +846,7 @@ class BigBosAgent:
         )
 
         # Use a lightweight model for summarization; fallback to active model
-        summary_model = self.config.small_model or self.config.active_model
+        summary_model = self._resolve_small_model()
         try:
             response = await provider.chat(
                 [summary_msg], [],
@@ -875,7 +894,7 @@ class BigBosAgent:
                     content=f"Summarize this conversation in 2-3 sentences:\n\n{convo}",
                 )],
                 [],
-                ModelOptions(model=self.config.small_model, max_tokens=200),
+                ModelOptions(model=self._resolve_small_model(), max_tokens=200),
             )
             session.summary = response.content
             self.memory.save_session_summary(session.id, response.content)
@@ -923,7 +942,7 @@ class BigBosAgent:
         ]
 
         options = ModelOptions(
-            model=agent_cfg.model or self.config.small_model,
+            model=agent_cfg.model or self._resolve_small_model(),
             max_tokens=2048,
         )
 
@@ -1041,7 +1060,7 @@ Return ONLY the skill content, no extra commentary."""
         try:
             response = await provider.chat(
                 [Message(role="user", content=prompt)], [],
-                ModelOptions(model=self.config.small_model, max_tokens=4000),
+                ModelOptions(model=self._resolve_small_model(), max_tokens=4000),
             )
             raw = response.content.strip()
 
@@ -1117,7 +1136,7 @@ Only return the JSON, no other text."""
         try:
             response = await provider.chat(
                 [Message(role="user", content=prompt)], [],
-                ModelOptions(model=self.config.small_model, max_tokens=300),
+                ModelOptions(model=self._resolve_small_model(), max_tokens=300),
             )
             import re
             result = response.content.strip()

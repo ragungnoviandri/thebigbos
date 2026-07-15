@@ -1,7 +1,7 @@
 {
   "active_provider": "opencode-go",
   "active_model": "deepseek-v4-pro",
-  "small_model": "gpt-4o-mini",
+  "small_model": "deepseek-v4-flash",
   "providers": {
     "openai": {
       "api_key": "${OPENAI_API_KEY}",
@@ -103,7 +103,7 @@
     "explore": {
       "name": "explore",
       "description": "Codebase explorer \u2014 searches files, patterns, code. Read-only.",
-      "model": "gpt-4o-mini",
+      "model": "deepseek-v4-flash",
       "max_steps": 10,
       "tools": [
         "read",
@@ -129,7 +129,7 @@
     "reviewer": {
       "name": "reviewer",
       "description": "Code reviewer \u2014 finds bugs, style issues, and security problems.",
-      "model": "gpt-4o-mini",
+      "model": "deepseek-v4-flash",
       "max_steps": 5,
       "tools": [
         "read",

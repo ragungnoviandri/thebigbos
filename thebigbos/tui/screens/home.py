@@ -1427,7 +1427,7 @@ class HomeScreen(Screen[Any]):
                         [Message(role="user", content=prompt)],
                         [],
                         ModelOptions(
-                            model=agent_ref.config.small_model or agent_ref.config.active_model,
+                            model=agent_ref._resolve_small_model() if agent_ref else "deepseek-v4-flash",
                             max_tokens=80,
                         ),
                     )
