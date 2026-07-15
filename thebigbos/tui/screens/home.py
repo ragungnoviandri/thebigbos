@@ -1431,7 +1431,21 @@ class HomeScreen(Screen[Any]):
                             max_tokens=80,
                         ),
                     )
+
+                    # Don't use error responses as commit messages
+                    if response.finish_reason == "error":
+                        self.notify(
+                            f"AI commit message failed: {response.content[:120]}",
+                            severity="warning",
+                        )
+                        input_widget.value = "chore: update"
+                        return
+
                     msg = response.content.strip().strip('"').strip("'")
+                    # Also guard against error-prefixed content that snuck through
+                    if msg.startswith("[") and "] " in msg[:30]:
+                        input_widget.value = "chore: update"
+                        return
                     msg = msg.split("\n")[0].strip()
                     if len(msg) > 100:
                         msg = msg[:97] + "..."
