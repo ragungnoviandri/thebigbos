@@ -122,7 +122,27 @@ class OpenAIProvider(ModelProvider):
         """Convert internal messages to OpenAI format."""
         formatted = []
         for m in messages:
-            msg: dict[str, Any] = {"role": m.role, "content": m.content}
+            msg: dict[str, Any] = {"role": m.role}
+
+            # ——— content handling ———
+            if m.role == "assistant" and m.tool_calls:
+                # OpenAI spec: assistant with tool_calls → content=null (not "")
+                msg["content"] = m.content or None
+            elif m.role == "tool":
+                msg["content"] = m.content or "(empty)"
+                if m.tool_call_id:
+                    msg["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    msg["name"] = m.name
+                formatted.append(msg)
+                continue
+            elif m.content:
+                msg["content"] = m.content
+            else:
+                # Skip empty-content messages for user/system/assistant roles
+                continue
+
+            # ——— tool_calls ———
             if m.tool_calls:
                 msg["tool_calls"] = [
                     {
@@ -132,6 +152,7 @@ class OpenAIProvider(ModelProvider):
                     }
                     for tc in m.tool_calls
                 ]
+
             if m.tool_call_id:
                 msg["tool_call_id"] = m.tool_call_id
             if m.name:

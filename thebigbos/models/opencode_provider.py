@@ -47,9 +47,11 @@ class OpencodeGoProvider(ModelProvider):
             body["tools"] = tools
             body["tool_choice"] = "auto"
 
-        # Enable thinking/reasoning for supported models
+        # Enable thinking for DeepSeek/Claude models
+        # NOTE: Some upstreams reject "budget_tokens" inside the thinking block.
+        # We send a simple {"type": "enabled"} and rely on max_tokens to cap.
         if opts.thinking_budget and opts.thinking_budget > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": opts.thinking_budget}
+            body["thinking"] = {"type": "enabled"}
         if opts.reasoning_effort:
             body["reasoning_effort"] = opts.reasoning_effort
 
@@ -152,9 +154,11 @@ class OpencodeGoProvider(ModelProvider):
             body["tools"] = tools
             body["tool_choice"] = "auto"
 
-        # Enable thinking/reasoning for supported models
+        # Enable thinking for DeepSeek/Claude models
+        # NOTE: Some upstreams reject "budget_tokens" inside the thinking block.
+        # We send a simple {"type": "enabled"} and rely on max_tokens to cap.
         if opts.thinking_budget and opts.thinking_budget > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": opts.thinking_budget}
+            body["thinking"] = {"type": "enabled"}
         if opts.reasoning_effort:
             body["reasoning_effort"] = opts.reasoning_effort
 
@@ -183,7 +187,33 @@ class OpencodeGoProvider(ModelProvider):
     def _format_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         formatted = []
         for m in messages:
-            msg: dict[str, Any] = {"role": m.role, "content": m.content}
+            msg: dict[str, Any] = {"role": m.role}
+
+            # ——— content handling ———
+            if m.role == "assistant" and m.tool_calls:
+                # OpenAI spec: assistant messages with tool_calls should have
+                # content=null (not empty string). Some upstream providers
+                # (DeepSeek, Console Go) reject content="" here.
+                msg["content"] = m.content or None
+            elif m.role == "tool":
+                # Tool result messages: content must be non-empty per spec.
+                # Some APIs reject empty tool results outright.
+                msg["content"] = m.content or "(empty)"
+                if m.tool_call_id:
+                    msg["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    msg["name"] = m.name
+                formatted.append(msg)
+                continue
+            elif m.content:
+                msg["content"] = m.content
+            else:
+                # Skip messages with truly empty content (user/system/assistant
+                # without tool_calls) — these violate the API spec and cause
+                # "message format issue" errors from upstream providers.
+                continue
+
+            # ——— tool_calls ———
             if m.tool_calls:
                 msg["tool_calls"] = [
                     {
@@ -193,6 +223,7 @@ class OpencodeGoProvider(ModelProvider):
                     }
                     for tc in m.tool_calls
                 ]
+
             if m.tool_call_id:
                 msg["tool_call_id"] = m.tool_call_id
             if m.name:

@@ -1,5 +1,6 @@
 """Ollama provider implementation (OpenAI-compatible endpoint)."""
 
+import json
 from typing import Any, AsyncIterator
 
 from .provider import Message, ModelOptions, ModelProvider, ModelResponse
@@ -98,7 +99,31 @@ class OllamaProvider(ModelProvider):
     def _format_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         formatted = []
         for m in messages:
-            msg: dict[str, Any] = {"role": m.role, "content": m.content}
+            msg: dict[str, Any] = {"role": m.role}
+            if m.role == "assistant" and m.tool_calls:
+                msg["content"] = m.content or None
+            elif m.role == "tool":
+                msg["content"] = m.content or "(empty)"
+                if m.tool_call_id:
+                    msg["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    msg["name"] = m.name
+                formatted.append(msg)
+                continue
+            elif m.content:
+                msg["content"] = m.content
+            else:
+                continue  # skip empty messages
+
+            if m.tool_calls:
+                msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                    }
+                    for tc in m.tool_calls
+                ]
             if m.tool_call_id:
                 msg["tool_call_id"] = m.tool_call_id
             if m.name:
