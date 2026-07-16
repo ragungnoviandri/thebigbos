@@ -56,7 +56,8 @@ class MemoryManager:
                 created_at REAL,
                 updated_at REAL,
                 parent_id TEXT,
-                source TEXT DEFAULT ''
+                source TEXT DEFAULT '',
+                cost REAL DEFAULT 0.0
             );
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +92,11 @@ class MemoryManager:
         # Migration: add reasoning_content column for existing databases
         try:
             self.conn.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT DEFAULT ''")
+        except Exception:
+            pass  # Column already exists
+        # Migration: add cost column for existing databases
+        try:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN cost REAL DEFAULT 0.0")
         except Exception:
             pass  # Column already exists
         self.conn.commit()
