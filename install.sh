@@ -84,7 +84,7 @@ echo "[5/6] Creating wrapper..."
 cat > "$INSTALL_DIR/bin/deBigBos" << 'WRAPPER'
 #!/usr/bin/env bash
 TB_HOME="${deBigBos_HOME:-$HOME/.local/share/deBigBos}"
-exec "$TB_HOME/venv/bin/python" -m deBigBos "$@"
+exec "$TB_HOME/venv/bin/python" -m debigbos "$@"
 WRAPPER
 chmod +x "$INSTALL_DIR/bin/deBigBos"
 ln -sf "$INSTALL_DIR/bin/deBigBos" "$BIN_DIR/deBigBos"
