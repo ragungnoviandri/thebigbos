@@ -2515,6 +2515,7 @@ class HomeScreen(Screen[Any]):
         sidebar.skill_count = len(self.agent.skills.list_skills())
         sidebar.auto_approve = self.agent.config.auto_approve
         sidebar.thinking = self._thinking
+        sidebar.refresh()
 
         # Update status bar
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -2549,6 +2550,7 @@ class HomeScreen(Screen[Any]):
                 pass
         status_bar.mode = sidebar.mode
         status_bar.thinking = self._thinking
+        status_bar.refresh()
 
         # Toggle send/stop button
         self._toggle_send_button()
