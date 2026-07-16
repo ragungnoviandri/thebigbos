@@ -648,13 +648,13 @@ class SettingsDialog(ModalScreen[None]):
             provider_name = event.button.id.replace("edit-provider-btn-", "")
             self._edit_provider(provider_name)
 
-    @on(Select.Changed, "Select[id^='model-']")
+    @on(Select.Changed)
     def _on_provider_model_changed(self, event: Select.Changed) -> None:
         """Handle model change in provider list."""
         if not event.value or event.value is Select.NULL or event.value is Select.BLANK:
             return
         agent = self._home.agent
-        if not agent or not event.control.id:
+        if not agent or not event.control.id or not event.control.id.startswith("model-"):
             return
         provider_name = event.control.id.replace("model-", "")
         cfg = agent.config.providers.get(provider_name)
