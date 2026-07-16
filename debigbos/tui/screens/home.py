@@ -1019,17 +1019,17 @@ class HomeScreen(Screen[Any]):
             response_area.write(banner)
 
             # Show existing sessions inline so user can pick one
+            response_area.write("[bold cyan]📂 Sessions:[/bold cyan]\n")
+            response_area.write("  [dim]*[/dim] [@click=new_session][green]🆕 New Session...[/green][/]\n")
             if sessions:
-                response_area.write("[bold cyan]📂 Recent sessions:[/bold cyan]\n")
                 for i, s in enumerate(sessions[:10], 1):
                     title = (s.get("title") or "Untitled")[:40]
                     sid = s["id"][:8]
                     src = s.get("source", "")
                     tag = f" [dim]({src})[/dim]" if src else ""
-                    response_area.write(f"  [bold]{i}.[/bold] [cyan]{title}[/cyan] [dim]{sid}{tag}[/dim]")
-                response_area.write("\n[dim]Select from the sidebar → or just start typing![/dim]\n")
+                    response_area.write(f"  [dim]*[/dim] [@click=switch_session('{s['id']}')][cyan]{title}[/cyan][/] [dim]{sid}{tag}[/dim]\n")
             else:
-                response_area.write("[dim]No sessions yet. Just start typing to create one![/dim]\n")
+                response_area.write("  [dim](none yet — just start typing!)[/dim]\n")
 
             self._populate_session_select()
             self._populate_provider_select()
@@ -2419,6 +2419,42 @@ class HomeScreen(Screen[Any]):
         finally:
             status_bar.api_info = ""
             self._update_sidebar()
+
+    # ── Clickable session actions (from welcome page) ──────────
+
+    def action_new_session(self) -> None:
+        """Create a new session (triggered from welcome click)."""
+        import asyncio
+        asyncio.create_task(self._on_new_session_click())
+
+    async def _on_new_session_click(self) -> None:
+        """Start a fresh session."""
+        self.agent.sessions.active_session_id = None
+        response_area = self.query_one("#response-area", ResponseArea)
+        response_area.clear()
+        response_area.write("[green]🆕 New session started! Just type your first message.[/green]\n")
+        self._update_sidebar()
+
+    def action_switch_session(self, session_id: str) -> None:
+        """Switch to an existing session (triggered from welcome click)."""
+        import asyncio
+        asyncio.create_task(self._on_switch_session_click(session_id))
+
+    async def _on_switch_session_click(self, session_id: str) -> None:
+        """Load and display a session."""
+        if self.agent.continue_session(session_id):
+            response_area = self.query_one("#response-area", ResponseArea)
+            response_area.clear()
+            response_area.write(f"[green]📂 Loaded session: [bold]{session_id[:8]}[/bold][/green]\n")
+            # Replay session messages
+            replay_messages = self.agent.sessions.history(session_id)
+            for msg in replay_messages:
+                if msg.role == "assistant":
+                    response_area.write(msg.content)
+            self._update_sidebar()
+            self.notify(f"Switched to session {session_id[:8]}", severity="success")
+        else:
+            self.notify(f"Failed to load session {session_id[:8]}", severity="error")
 
     # ── Keybinding actions ────────────────────────────────────
     def action_show_help(self) -> None:
