@@ -720,6 +720,11 @@ async def run_import(args: argparse.Namespace) -> None:
         target.execute("ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Add cost column if missing
+    try:
+        target.execute("ALTER TABLE sessions ADD COLUMN cost REAL DEFAULT 0.0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     target.commit()
 
     imported_sessions = 0

@@ -139,6 +139,21 @@ class MemoryManager:
         )
         self.conn.commit()
 
+    def save_session_cost(self, session_id: str, cost: float) -> None:
+        """Persist accumulated cost for a session."""
+        self.conn.execute(
+            "UPDATE sessions SET cost = ?, updated_at = ? WHERE id = ?",
+            (cost, time.time(), session_id),
+        )
+        self.conn.commit()
+
+    def get_session_cost(self, session_id: str) -> float:
+        """Get accumulated cost for a session. Returns 0.0 if not found."""
+        row = self.conn.execute(
+            "SELECT cost FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
     def save_message(self, session_id: str, role: str, content: str,
                      tool_calls: list | None = None, tool_call_id: str | None = None,
                      name: str | None = None, reasoning_content: str | None = None) -> None:

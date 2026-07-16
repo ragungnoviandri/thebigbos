@@ -259,6 +259,8 @@ class BigBosAgent:
         # If already loaded in memory, just switch
         if session_id in self.sessions.sessions:
             self.sessions.switch_session(session_id)
+            # Load cost from DB for this session
+            self.state.accumulated_cost = self.memory.get_session_cost(session_id)
             self._emit("session_loaded", json.dumps({"id": session_id, "messages": len(self.sessions.active.messages) if self.sessions.active else 0}))
             return self.sessions.active
 
@@ -323,6 +325,9 @@ class BigBosAgent:
                 session.title = s.get("title", "")
                 session.summary = s.get("summary", "")
                 break
+
+        # Load persisted cost for this session
+        self.state.accumulated_cost = self.memory.get_session_cost(session_id)
 
         self._emit("session_loaded", json.dumps({"id": session_id, "messages": len(session.messages)}))
         return session
@@ -559,6 +564,9 @@ class BigBosAgent:
                 self.state.accumulated_cost += estimate_cost(
                     self.config.active_model, input_tokens, output_tokens
                 )
+                # Persist cost to DB so it survives session switches
+                if self.sessions.active_session_id:
+                    self.memory.save_session_cost(self.sessions.active_session_id, self.state.accumulated_cost)
 
             # Save assistant message
             assistant_msg = Message(
@@ -689,6 +697,9 @@ class BigBosAgent:
                 self.state.accumulated_cost += estimate_cost(
                     self.config.active_model, input_tokens, output_tokens
                 )
+                # Persist cost to DB so it survives session switches
+                if self.sessions.active_session_id:
+                    self.memory.save_session_cost(self.sessions.active_session_id, self.state.accumulated_cost)
 
             # Check for API-level errors in the response
             if response.finish_reason == "error":
