@@ -475,6 +475,27 @@ class ResponseArea(RichLog):
 
 class SettingsDialog(ModalScreen[None]):
     """Settings dialog with General + Skills tabs."""
+     # 1. TARUH CSS KHUSUS DI SINI AGAR TOMBOL BERADA DI KANAN BAWAH
+    DEFAULT_CSS = """
+    #settings-dialog {
+        width: 80%;
+        height: auto;
+        border: solid green;
+        background: $surface;
+        padding: 1;
+    }
+
+    #settings-actions {
+        width: 100%;                  /* Wajib 100% agar memenuhi lebar dialog */
+        height: auto;
+        align-horizontal: right;      /* Menggeser penampung/container ke kanan */
+        margin-top: 1;                /* Memberi jarak atas agar tidak menempel */
+    }
+
+    #settings-actions Button {
+        margin-left: 1;               /* Memberi jarak antar tombol */
+    }
+    """
 
     BINDINGS = [("escape", "close", "Close"), ("q", "close", "Close")]
 
