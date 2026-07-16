@@ -547,17 +547,19 @@ class SettingsDialog(ModalScreen[None]):
         for name, cfg in providers.items():
             is_active = name == agent.config.active_provider
             marker = "[green]●[/green]" if is_active else "○"
-            with Horizontal(classes="provider-row"):
-                row = Horizontal()
-                row.mount(ModalLabel(f"  {marker} [bold]{name}[/bold]"))
-                # Model select for this provider
-                models = cfg.models if isinstance(cfg.models, list) else []
-                model_options = [(m, m) for m in models] if models else [("none", "")]
-                active_model = cfg.default_model or (models[0] if models else "")
-                model_select = Select(model_options, prompt="Model", id=f"model-{name}", value=active_model)
-                row.mount(model_select)
-                row.mount(ModalButton("✎", variant="default", id=f"edit-provider-btn-{name}", classes="icon-btn"))
-                container.mount(row)
+            
+            # Model select for this provider
+            models = cfg.models if isinstance(cfg.models, list) else []
+            model_options = [(m, m) for m in models] if models else [("none", "")]
+            active_model = cfg.default_model or (models[0] if models else "")
+            
+            row = Horizontal(
+                ModalLabel(f"  {marker} [bold]{name}[/bold]"),
+                Select(model_options, prompt="Model", id=f"model-{name}", value=active_model),
+                ModalButton("✎", variant="default", id=f"edit-provider-btn-{name}", classes="icon-btn"),
+                classes="provider-row"
+            )
+            container.mount(row)
 
     @on(Button.Pressed, "#add-provider-btn")
     async def _on_add_provider_dialog(self) -> None:
