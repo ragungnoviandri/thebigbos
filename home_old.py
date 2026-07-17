@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import Any
 
 
-from textual import on, events
+
+from textual import on
+from textual import events
 from textual.app import ComposeResult
 from textual.css.query import NoMatches
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -52,18 +54,6 @@ from ...config.manager import ProviderConfig
 from ...models.provider import Message as ProviderMessage
 from ... import get_version_string, get_build_number
 
-from .widgets import (
-    UpdateAvailable,
-    VersionLabel,
-    ChatInput,
-    StatusBar,
-    SidebarWidget,
-    ToolLogWidget,
-    ShortcutsWidget,
-    ResponseArea,
-)
-from .dialogs import SettingsDialog, AddProviderDialog
-
 from rich.markup import escape as _rich_escape
 import re
 
@@ -73,14 +63,945 @@ def _strip_markup(text: str) -> str:
     return re.sub(r"\[/?[^\]]*\]", "", text)
 
 
+class UpdateAvailable(Message):
+    """Posted when user clicks version label while update is available."""
+
+    def __init__(self, new_version: str = "", changelog: str = "") -> None:
+        super().__init__()
+        self.new_version = new_version
+        self.changelog = changelog
 
 
+class VersionLabel(Button):
+    """Clickable version display — shows update dialog on click."""
+
+    version: reactive[str] = reactive("")
+    update_available: reactive[bool] = reactive(False)
+    _latest_version: str = ""
+    _changelog: str = ""
+
+    def __init__(self, id: str | None = "sidebar-version", **kwargs):
+        super().__init__(id=id, **kwargs)
+        self.can_focus = True
+
+    def on_button_pressed(self) -> None:
+        """Always show version/update dialog on press."""
+        if self.update_available:
+            self.post_message(UpdateAvailable(self._latest_version, self._changelog))
+        else:
+            self.post_message(UpdateAvailable("", ""))  # Show "checking" or "up-to-date"
+
+    def render(self) -> str:
+        if self.update_available:
+            dot = "[bold blue]●[/bold blue]"
+        else:
+            dot = "[bold green]●[/bold green]"
+        return f" {dot} [dim]de BigBos {self.version}[/dim]"
 
 
+class ChatInput(TextArea):
+    """Multi-line chat input. Enter=send, Ctrl+J=newline, ↑↓=history, max 3 rows."""
+
+    BINDINGS = [
+        ("ctrl+j", "insert_newline", "New Line"),
+    ]
+
+    def on_mount(self) -> None:
+        self.styles.max_height = 6
+        self._history_index: int = -1
+        self._saved_input: str = ""
+
+    def clear(self):
+        """Clear text and undo history to prevent out-of-bounds undo crashes."""
+        self._history_index = -1
+        self._saved_input = ""
+        result = super().clear()
+        self.history.clear()
+        return result
+
+    def _get_user_messages(self) -> list[str]:
+        """Collect user messages from the active session, newest first."""
+        screen = self.screen
+        if not hasattr(screen, 'agent') or not screen.agent:
+            return []
+        session = screen.agent.sessions.active if screen.agent.sessions else None
+        if not session:
+            return []
+        # Reverse chronological, deduplicated, non-empty
+        seen = set()
+        result = []
+        for msg in reversed(session.messages):
+            if msg.role == "user" and msg.content.strip():
+                stripped = msg.content.strip()
+                if stripped not in seen:
+                    seen.add(stripped)
+                    result.append(stripped)
+        return result
+
+    def _on_key(self, event) -> None:
+        if event.key == "up":
+            history = self._get_user_messages()
+            if history:
+                cursor_row = self.cursor_location[0]
+                if self._history_index == -1 and cursor_row > 0:
+                    # Not at first line — let TextArea handle cursor movement
+                    super()._on_key(event)
+                    return
+                if self._history_index == -1:
+                    self._saved_input = self.text
+                    self._history_index = 0
+                elif self._history_index < len(history) - 1:
+                    self._history_index += 1
+                if self._history_index < len(history):
+                    self.load_text(history[self._history_index])
+                    self.move_cursor(self.document.end)
+                event.stop()
+                event.prevent_default()
+            else:
+                super()._on_key(event)
+
+        elif event.key == "down":
+            if self._history_index > 0:
+                self._history_index -= 1
+                history = self._get_user_messages()
+                self.load_text(history[self._history_index])
+                self.move_cursor(self.document.end)
+                event.stop()
+                event.prevent_default()
+            elif self._history_index == 0:
+                # Back to original draft
+                self._history_index = -1
+                self.load_text(self._saved_input)
+                self._saved_input = ""
+                event.stop()
+                event.prevent_default()
+            else:
+                super()._on_key(event)
+
+        elif event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            text = self.text.strip()
+            if text:
+                self.clear()
+                # re-focus immediately so cursor is ready
+                self.focus()
+                # Call screen handler directly
+                screen = self.screen
+                if hasattr(screen, '_handle_chat_input'):
+                    import asyncio
+                    asyncio.create_task(screen._handle_chat_input(text))
+        else:
+            # Any other key resets history browsing
+            if self._history_index != -1:
+                self._history_index = -1
+                self._saved_input = ""
+            super()._on_key(event)
+
+    def action_insert_newline(self) -> None:
+        """Insert newline at cursor."""
+        self.insert("\n")
 
 
+# Regex to strip Rich markup tags for plain-text length calculation
+import re as _re
+_MARKUP_TAG = _re.compile(r"\[/?[^\]]*\]")
 
 
+def _strip_markup(text: str) -> str:
+    return _MARKUP_TAG.sub("", text)
+
+
+class StatusBar(Static):
+    """Bottom status bar — 3-column: [indicator] dir | provider/model | stats."""
+
+    model: reactive[str] = reactive("")
+    provider: reactive[str] = reactive("")
+    context_tokens: reactive[int] = reactive(0)
+    context_limit: reactive[int] = reactive(0)
+    total_cost: reactive[float] = reactive(0.0)
+    mode: reactive[str] = reactive("build")
+    elapsed: reactive[float] = reactive(0)
+    thinking: reactive[bool] = reactive(False)
+    done_flash: reactive[bool] = reactive(False)
+    api_info: reactive[str] = reactive("")
+    api_error: reactive[str] = reactive("")
+    git_info: reactive[str] = reactive("")
+    workspace: reactive[str] = reactive("")
+
+    _spinner_frame: int = 0
+    _think_start: float = 0.0
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def watch_thinking(self, thinking: bool) -> None:
+        if thinking:
+            self._think_start = time.time()
+            self.done_flash = False
+        elif self._think_start > 0:
+            self.done_flash = True
+            self._spinner_frame = 0
+            self.elapsed = time.time() - self._think_start
+            self.set_timer(3.0, lambda: self._clear_done())
+
+    def _clear_done(self) -> None:
+        self.done_flash = False
+        self.refresh(layout=False)
+
+    def on_mount(self) -> None:
+        self.set_interval(0.1, self._tick)
+
+    def _tick(self) -> None:
+        if self.thinking:
+            self._spinner_frame = (self._spinner_frame + 1) % len(self.SPINNER_FRAMES)
+            if self._think_start > 0:
+                self.elapsed = time.time() - self._think_start
+            self.refresh(layout=False)
+
+    def render(self) -> str:
+        # ── Left: [spinner/checkmark] workspace ──
+        if self.thinking:
+            frame = self.SPINNER_FRAMES[self._spinner_frame]
+            indicator = f"[yellow]{frame}[/yellow] thinking"
+        elif self.done_flash:
+            indicator = "[green]✓ Done[/green]"
+        elif self.api_error:
+            indicator = f"[red]✗ {self.api_error[:20]}[/red]"
+        else:
+            indicator = "[dim]✓ Ready[/dim]"
+
+        ws = self.workspace or self.git_info or "~"
+        left = f"{indicator}  [dim]{ws}[/dim]"
+
+        # ── Center: provider/model ──
+        center = ""
+        if self.provider:
+            center = f"[primary]{self.provider}[/primary]/[secondary]{self.model}[/secondary]"
+
+        # ── Right: elapsed | ctx tokens (%) | cost ──
+        right_parts = []
+        if self.thinking or self.done_flash:
+            right_parts.append(f"[dim]{self.elapsed:.0f}s[/dim]")
+
+        if self.context_tokens > 0:
+            limit = self.context_limit or 128000
+            pct = min(100, int(self.context_tokens / limit * 100))
+            pct_color = "[red]" if pct > 80 else "[yellow]" if pct > 50 else ""
+            pct_end = "[/red]" if pct > 80 else "[/yellow]" if pct > 50 else ""
+            right_parts.append(f"[dim]ctx {self.context_tokens:,}/{limit:,} {pct_color}({pct}%){pct_end}[/dim]")
+
+        if self.total_cost > 0:
+            right_parts.append(f"[green]${self.total_cost:.2f} spent[/green]")
+
+        right = "  ".join(right_parts) if right_parts else ""
+
+        # ── 3-column layout using container width ──
+        width = max(80, self.size.width)
+        third = width // 3
+
+        # Strip Rich markup for length calculation
+        left_plain = _strip_markup(left)
+        center_plain = _strip_markup(center)
+        right_plain = _strip_markup(right)
+
+        # Left: pad to fill first third
+        left_pad = max(0, third - len(left_plain))
+        # Center: pad both sides to fill middle third
+        center_pad = max(0, third - len(center_plain))
+        center_left = center_pad // 2
+        center_right = center_pad - center_left
+        # Right: pad to fill last third
+        right_pad = max(0, third - len(right_plain))
+
+        return f"{left}{' ' * left_pad}{' ' * center_left}{center}{' ' * center_right}{' ' * right_pad}{right}"
+
+
+class SidebarWidget(Static):
+    """Session info sidebar."""
+
+    session_id: reactive[str] = reactive("")
+    session_title: reactive[str] = reactive("Untitled")
+    model: reactive[str] = reactive("")
+    provider: reactive[str] = reactive("")
+    context_tokens: reactive[int] = reactive(0)
+    context_limit: reactive[int] = reactive(0)
+    total_cost: reactive[float] = reactive(0.0)
+    skill_count: reactive[int] = reactive(0)
+    auto_approve: reactive[bool] = reactive(False)
+    mode: reactive[str] = reactive("build")
+    thinking: reactive[bool] = reactive(False)
+    error_msg: reactive[str] = reactive("")
+    git_branch: reactive[str] = reactive("")
+    git_status: reactive[str] = reactive("")
+    git_remote: reactive[str] = reactive("")
+
+    def render(self) -> str:
+        lines = []
+        lines.append(f"[bold #fab283] de BigBos[/bold #fab283]")
+        lines.append(f" [dim]#{self.session_id or '---'}[/dim]")
+        lines.append("")
+        if self.error_msg:
+            lines.append(f" [red]{self.error_msg[:60]}[/red]")
+            lines.append("")
+        if self.thinking:
+            lines.append(" [yellow]⠋ thinking...[/yellow]")
+            lines.append("")
+        if self.session_id:
+            title = self.session_title or "Untitled"
+            lines.append(f" [bold]{title[:35]}[/bold]")
+            lines.append("")
+        else:
+            lines.append(" [dim]No active session[/dim]")
+            lines.append("")
+
+        # Mode: BUILD (blue), PLAN (orange)
+        color = "#5c9cf5" if self.mode == "build" else "#fab283"
+        lines.append(f" [bold {color}]{self.mode.upper()}[/bold {color}]")
+        lines.append("")
+
+        limit = self.context_limit or 128000
+        pct = min(100, int(self.context_tokens / limit * 100)) if self.context_tokens > 0 else 0
+        pct_color = "[red]" if pct > 80 else "[yellow]" if pct > 50 else ""
+        pct_end = "[/red]" if pct > 80 else "[/yellow]" if pct > 50 else ""
+        bar = self._make_bar(pct)
+        lines.append(" Context")
+        lines.append(f"  [dim]{self.context_tokens:,}[/dim]/[bold]{limit:,}[/bold] tokens")
+        lines.append(f"  {pct_color}{bar} {pct}% used{pct_end}")
+        if self.total_cost > 0:
+            lines.append(f"  ${self.total_cost:,.4f} spent")
+        else:
+            lines.append(f"  [dim]$0 spent[/dim]")
+        lines.append("")
+
+        if self.skill_count:
+            lines.append(f" Skills: {self.skill_count}")
+        if self.auto_approve:
+            lines.append(" Auto: [yellow]ON[/yellow]")
+        if self.git_branch:
+            lines.append("")
+            lines.append(f"[bold #5c9cf5] Git[/bold #5c9cf5]")
+            lines.append(f" [green]{self.git_branch}[/green] {self.git_status}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _make_bar(pct: int, width: int = 10) -> str:
+        filled = int(width * pct / 100)
+        return "[" + "|" * filled + "." * (width - filled) + "]"
+
+
+class ToolLogWidget(Static):
+    """Shows recent tool executions."""
+
+    tool_entries: reactive[list[dict[str, Any]]] = reactive([])
+
+    def render(self) -> str:
+        if not self.tool_entries:
+            return ""
+
+        lines = [" Tools"]
+        lines.append(" ─────")
+        for t in self.tool_entries[-5:]:
+            icon = "..." if t.get("status") == "running" else "OK"
+            args_str = json.dumps(t.get("args", {}))[:60]
+            lines.append(f" {icon} {t['name']}({args_str})")
+        return "\n".join(lines)
+
+
+class ShortcutsWidget(Static):
+    """Command palette reference in sidebar."""
+
+    def render(self) -> str:
+        shortcuts = [
+            # Title
+            ("[bold #5c9cf5]⌘ Command Palette[/bold #5c9cf5]", ""),
+            ("", ""),
+            # Chat
+            ("[bold #fab283]Chat[/bold #fab283]", ""),
+            ("Enter", "Send"),
+            ("Ctrl+J", "New Line"),
+            ("↑ / ↓", "History"),
+            ("", ""),
+            # Nav
+            ("[bold #5c9cf5]Navigate[/bold #5c9cf5]", ""),
+            ("Esc", "Focus Input"),
+            ("Tab", "Plan ⇄ Build"),
+            ("Ctrl+P", "Command Palette"),
+            ("Ctrl+S", "Sessions"),
+            ("Ctrl+M", "Models"),
+            ("Ctrl+H", "Help"),
+            ("", ""),
+            # Actions
+            ("[bold #a0d2a0]Actions[/bold #a0d2a0]", ""),
+            ("Ctrl+C", "Copy Selection"),
+            ("Ctrl+R", "Rename"),
+            ("Ctrl+Q", "Quit"),
+            ("Shift+Drag", "Select Text"),
+        ]
+
+        lines = []
+        for key, desc in shortcuts:
+            if not key and not desc:
+                lines.append("")
+            elif not desc:
+                lines.append(key)
+            else:
+                lines.append(f" [dim]{key:<14}[/dim] [dim italic]{desc}[/dim italic]")
+        return "\n".join(lines)
+
+
+class ResponseArea(RichLog):
+    """Rich text area for model responses — selectable + copyable, never steals focus."""
+
+    def on_mount(self) -> None:
+        self.can_focus = False  # Focus stays on chat input
+        self.highlight = True
+
+    def copy_to_clipboard(self, text: str) -> bool:
+        """Copy text to system clipboard. Returns True on success."""
+        import subprocess
+        import sys
+        if not text:
+            return False
+        try:
+            if sys.platform == "win32":
+                subprocess.run("clip", input=text[:10000].encode("utf-8", errors="replace"), check=False)
+            elif sys.platform == "darwin":
+                subprocess.run("pbcopy", input=text.encode("utf-8", errors="replace"), check=False)
+            else:
+                subprocess.run(["xclip", "-selection", "clipboard"],
+                               input=text.encode("utf-8", errors="replace"), check=False)
+            return True
+        except Exception:
+            return False
+
+
+class SettingsDialog(ModalScreen[None]):
+    """Settings dialog with General + Skills tabs."""
+     # 1. TARUH CSS KHUSUS DI SINI AGAR TOMBOL BERADA DI KANAN BAWAH
+    DEFAULT_CSS = """
+    #settings-dialog {
+        width: 80%;
+        height: auto;
+        border: solid green;
+        background: $surface;
+        padding: 1;
+    }
+
+    #settings-actions {
+        width: 100%;                  /* Wajib 100% agar memenuhi lebar dialog */
+        height: auto;
+        align-horizontal: right;      /* Menggeser penampung/container ke kanan */
+        margin-top: 1;                /* Memberi jarak atas agar tidak menempel */
+    }
+
+    #settings-actions Button {
+        margin-left: 1;               /* Memberi jarak antar tombol */
+    }
+
+    .provider-row {
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [("escape", "close", "Close"), ("q", "close", "Close")]
+
+    def __init__(self, home_screen: "HomeScreen"):
+        super().__init__()
+        self._home = home_screen
+        self._skill_switches: dict[str, "Switch"] = {}
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical, Horizontal, VerticalScroll
+        from textual.widgets import Label as ModalLabel, Button as ModalButton, Input, Select
+        from textual.widgets import TabbedContent, TabPane, Switch
+
+        with Vertical(id="settings-dialog", classes="modal-container"):
+            yield ModalLabel(" ⚙ Settings ", id="dialog-title")
+            with TabbedContent(id="settings-tabs"):
+                # Tab 1: AI Provider
+                with TabPane("🤖 AI Provider", id="tab-provider"):
+                    yield ModalLabel("")
+                    yield ModalLabel("[bold]Current Model[/bold]")
+                    agent = self._home.agent
+                    if agent:
+                        yield ModalLabel(f"  {agent.config.active_provider} / {agent.config.active_model}", id="current-model-label")
+                    else:
+                        yield ModalLabel("  [dim]No agent loaded[/dim]", id="current-model-label")
+                    yield ModalLabel("")
+                    yield ModalLabel("[bold]Providers[/bold]")
+                    # Provider rows — inline in compose
+                    if agent and agent.config.providers:
+                        for name, cfg in agent.config.providers.items():
+                            is_active = name == agent.config.active_provider
+                            marker = "[green]●[/green]" if is_active else "○"
+                            models = cfg.models if isinstance(cfg.models, list) else []
+                            model_options = [(m, m) for m in models] if models else [("none", "")]
+                            active_model = cfg.default_model or (models[0] if models else "")
+                            with Horizontal(id=f"provider-row-{name}", classes="provider-row"):
+                                yield ModalLabel(f"  {marker} [bold]{name}[/bold]", id=f"plabel-{name}")
+                                yield Select(model_options, prompt="Model", id=f"model-{name}", value=active_model)
+                                yield ModalButton("✎", variant="default", id=f"edit-provider-btn-{name}", classes="icon-btn")
+                    else:
+                        yield ModalLabel("  [dim]No providers configured[/dim]")
+                    yield ModalLabel("")
+                    with Horizontal():
+                        yield ModalButton("+ Add Provider", variant="success", id="add-provider-btn")
+
+                # Tab 2: Skills
+                with TabPane("🛠 Skills", id="tab-skills"):
+                    yield ModalLabel("")
+                    yield ModalLabel("[bold]Enable / Disable Skills[/bold]")
+                    yield ModalLabel("[dim]Toggle individual skills. Disabled skills are hidden from the AI.[/dim]")
+                    yield ModalLabel("")
+                    yield VerticalScroll(id="skill-toggle-list")
+
+            yield ModalLabel("")
+            with Horizontal(id="settings-actions"):
+                yield ModalButton("💾 Save & Close", variant="primary", id="settings-save-btn")
+                yield ModalButton("Cancel", variant="default", id="settings-cancel-btn")
+
+    def on_mount(self) -> None:
+        """Populate skill toggles."""
+        self._populate_skill_toggles()
+
+    @on(events.Click, ".provider-row")
+    def _on_provider_row_click(self, event: events.Click) -> None:
+        """Click provider row → switch active provider."""
+        # Ignore clicks on buttons, selects, or inputs inside the row
+        if isinstance(event.widget, (Button, Select, Input)):
+            return
+        # Find the provider row (closest with id starting with provider-row-)
+        target = event.widget
+        while target and target.parent:
+            if target.id and target.id.startswith("provider-row-"):
+                name = target.id.replace("provider-row-", "")
+                self._switch_provider(name)
+                return
+            target = target.parent
+
+    def _switch_provider(self, name: str) -> None:
+        """Switch active provider and update UI markers."""
+        agent = self._home.agent
+        if not agent or name not in agent.config.providers:
+            return
+        cfg = agent.config.providers[name]
+        agent.config.active_provider = name
+        agent.config.active_model = cfg.default_model or (cfg.models[0] if cfg.models else "")
+
+        # Update "Current Model" label
+        try:
+            current_label = self.query_one("#current-model-label", Label)
+            current_label.update(f"  {name} / {agent.config.active_model}")
+        except NoMatches:
+            pass
+
+        # Update all provider row markers
+        for row_name in agent.config.providers:
+            try:
+                label = self.query_one(f"#plabel-{row_name}", Label)
+                marker = "[green]●[/green]" if row_name == name else "○"
+                label.update(f"  {marker} [bold]{row_name}[/bold]")
+            except NoMatches:
+                pass
+
+    @on(Button.Pressed, "#add-provider-btn")
+    async def _on_add_provider_dialog(self) -> None:
+        """Open the Add Provider dialog, register provider, then refresh."""
+        agent = self._home.agent
+        if not agent:
+            return
+        existing = list(agent.config.providers.keys())
+        dialog = AddProviderDialog(existing)
+        worker = self.run_worker(
+            self.app.push_screen_wait(dialog),
+            exclusive=True
+        )
+        result = await worker.wait()
+
+        if result:
+            # Register provider at runtime
+            data = getattr(dialog, '_result', None)
+            if data:
+                from ...config.models import ProviderConfig
+                cfg = ProviderConfig(
+                    api_key=data["api_key"],
+                    base_url=data["base_url"],
+                    models=data["models"],
+                    default_model=data["default_model"],
+                )
+                ok = agent.providers.register_runtime_provider(data["name"], cfg)
+                if ok:
+                    agent.config.active_provider = data["name"]
+                    agent.config.active_model = data["default_model"]
+                    agent.notify(f"✨ Provider '{data['name']}' added!")
+
+            self.dismiss(None)
+            await asyncio.sleep(0.1)
+            # Re-open settings to show new provider
+            worker2 = self.run_worker(self._home._show_settings(), exclusive=True)
+            await worker2.wait()
+
+    def _populate_skill_toggles(self) -> None:
+        """Add switch toggles for every skill — grouped by category."""
+        from textual.containers import Horizontal
+        from textual.widgets import Label as ModalLabel, Switch
+
+        skill_list = self.query_one("#skill-toggle-list", VerticalScroll)
+        agent = self._home.agent
+        if not agent:
+            return
+
+        skills = agent.skills.list_skills()
+
+        if not skills:
+            skill_list.mount(ModalLabel("[dim]No skills found.[/dim]"))
+            return
+
+        # Group by category
+        from collections import defaultdict
+        groups: dict[str, list] = defaultdict(list)
+        for s in skills:
+            cat = s.get("category", "Uncategorized")
+            groups[cat].append(s)
+
+        # Sort: enabled-first categories first
+        sorted_cats = sorted(groups.keys(), key=lambda c: (
+            -sum(1 for s in groups[c] if s.get("enabled", True)),
+            c,
+        ))
+
+        for cat in sorted_cats:
+            items = groups[cat]
+            # Category header
+            enabled_count = sum(1 for s in items if s.get("enabled", True))
+            skill_list.mount(ModalLabel(
+                f"\n[bold #5c9cf5]{cat}[/bold #5c9cf5]  [dim]({enabled_count}/{len(items)})[/dim]"
+            ))
+            # Sort items: enabled first
+            items.sort(key=lambda s: (not s.get("enabled", True), s.get("name", "")))
+            for s in items:
+                name = s.get("name", "")
+                desc = s.get("description", "")[:80]
+                enabled = s.get("enabled", True)
+
+                switch = Switch(value=enabled, id=f"skill-switch-{name}")
+                self._skill_switches[name] = switch
+
+                status_icon = "[green]✓[/green]" if enabled else "[dim]✗[/dim]"
+                label_text = f"  {status_icon} {name}"
+                if desc:
+                    label_text += f"\n     [dim italic]{desc[:60]}[/dim italic]"
+
+                # Mount row first, then children
+                row = Horizontal(classes="skill-row")
+                skill_list.mount(row)
+                row.mount(ModalLabel(label_text))
+                row.mount(switch)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-save-btn":
+            self._save_settings()
+            self.dismiss(None)
+        elif event.button.id == "settings-cancel-btn":
+            self.dismiss(None)
+        elif event.button.id and event.button.id.startswith("edit-provider-btn-"):
+            provider_name = event.button.id.replace("edit-provider-btn-", "")
+            self._edit_provider(provider_name)
+
+    @on(Select.Changed)
+    def _on_provider_model_changed(self, event: Select.Changed) -> None:
+        """Handle model change in provider list."""
+        if not event.value or event.value is Select.NULL or event.value is Select.BLANK:
+            return
+        agent = self._home.agent
+        if not agent or not event.control.id or not event.control.id.startswith("model-"):
+            return
+        provider_name = event.control.id.replace("model-", "")
+        cfg = agent.config.providers.get(provider_name)
+        if cfg:
+            cfg.default_model = str(event.value)
+        if provider_name == agent.config.active_provider:
+            agent.config.active_model = str(event.value)
+
+    def _edit_provider(self, name: str) -> None:
+        """Open dialog to edit provider endpoint & API key."""
+        agent = self._home.agent
+        if not agent:
+            return
+        cfg = agent.config.providers.get(name)
+        if not cfg:
+            return
+        self.run_worker(self._show_edit_provider(name, cfg), exclusive=True)
+
+    async def _show_edit_provider(self, name: str, cfg: 'ProviderConfig') -> None:
+        """Show edit dialog for a provider."""
+        from textual.containers import Vertical, Horizontal
+        from textual.widgets import Label as ModalLabel, Button as ModalButton, Input
+        from textual.screen import ModalScreen
+
+        class EditProviderDialog(ModalScreen[dict | None]):
+            def compose(self2):
+                with Vertical(id="edit-provider-dialog", classes="modal-container"):
+                    yield ModalLabel(f" ✏ Edit Provider: {name} ", id="dialog-title")
+                    yield ModalLabel("")
+                    yield ModalLabel("[bold]Endpoint URL[/bold]")
+                    yield Input(value=cfg.base_url or "", id="edit-endpoint")
+                    yield ModalLabel("")
+                    yield ModalLabel("[bold]API Key[/bold]")
+                    yield Input(value=cfg.api_key or "", password=True, id="edit-apikey")
+                    yield ModalLabel("")
+                    with Horizontal():
+                        yield ModalButton("💾 Save", variant="primary", id="edit-save-btn")
+                        yield ModalButton("Cancel", variant="default", id="edit-cancel-btn")
+
+            def on_button_pressed(self2, event: Button.Pressed):
+                if event.button.id == "edit-save-btn":
+                    endpoint = self2.query_one("#edit-endpoint", Input).value
+                    apikey = self2.query_one("#edit-apikey", Input).value
+                    self2.dismiss({"endpoint": endpoint, "apikey": apikey})
+                elif event.button.id == "edit-cancel-btn":
+                    self2.dismiss(None)
+
+        dialog = EditProviderDialog()
+        result = await self.app.push_screen_wait(dialog)
+        if result:
+            cfg.base_url = result["endpoint"]
+            cfg.api_key = result["apikey"]
+            # Persist to auth.json
+            from ...config.auth import get_auth_manager
+            auth = get_auth_manager()
+            auth.set_key(name, result["apikey"], result["endpoint"])
+            # Re-open settings to show changes
+            self.dismiss(None)
+            await asyncio.sleep(0.1)
+            await self._home._show_settings()
+            self._home.notify(f"✅ Provider '{name}' updated!")
+
+    def _save_settings(self) -> None:
+        """Write settings back to config."""
+        agent = self._home.agent
+        if not agent:
+            return
+
+        # Skills
+        disabled = set()
+        for name, switch in self._skill_switches.items():
+            if not switch.value:
+                disabled.add(name)
+        agent.config.skills.disabled_skills = list(disabled)
+        agent.skills.disabled_skills = disabled
+        agent.skills._scanned = False
+
+        # Persist to global config
+        from pathlib import Path
+        config_path = Path.home() / ".config" / "deBigBos" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        agent.config_manager.save(agent.config, config_path)
+
+        self._home.notify("✅ Settings saved!", severity="success")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class AddProviderDialog(ModalScreen[str | None]):
+    """Modal dialog to add a new model provider.
+    
+    Returns the provider name on success, None on cancel.
+    """
+
+    PRESETS: dict[str, dict] = {
+        "anthropic": {
+            "label": "Anthropic (Claude)",
+            "base_url": "https://api.anthropic.com/v1",
+            "models": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+            "default_model": "claude-sonnet-4-20250514",
+        },
+        "groq": {
+            "label": "Groq",
+            "base_url": "https://api.groq.com/openai/v1",
+            "models": ["llama-3.1-70b", "mixtral-8x7b", "gemma2-9b"],
+            "default_model": "llama-3.1-70b",
+        },
+        "deepseek": {
+            "label": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "models": ["deepseek-chat", "deepseek-coder"],
+            "default_model": "deepseek-chat",
+        },
+        "together": {
+            "label": "Together AI",
+            "base_url": "https://api.together.xyz/v1",
+            "models": ["meta-llama/Meta-Llama-3.1-405B", "mistralai/Mixtral-8x22B"],
+            "default_model": "meta-llama/Meta-Llama-3.1-405B",
+        },
+        "openrouter": {
+            "label": "OpenRouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "models": ["openai/gpt-4o", "anthropic/claude-sonnet-4", "deepseek/deepseek-chat"],
+            "default_model": "deepseek/deepseek-chat",
+        },
+        "opencode-zen": {
+            "label": "OpenCode Zen",
+            "base_url": "https://opencode.ai/zen/v1",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "qwen-plus", "qwen-max"],
+            "default_model": "deepseek-v4-pro",
+        },
+        "ollama": {
+            "label": "Ollama (local)",
+            "base_url": "http://localhost:11434/v1",
+            "models": ["llama3.1", "qwen2.5", "deepseek-r1", "codellama"],
+            "default_model": "llama3.1",
+            "no_api_key": True,
+        },
+        "__custom__": {
+            "label": "Custom...",
+            "base_url": "",
+            "models": ["gpt-4o", "gpt-4o-mini"],
+            "default_model": "gpt-4o",
+        },
+    }
+
+    def __init__(self, existing_providers: list[str] | None = None):
+        super().__init__()
+        self._existing = set(existing_providers or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="add-provider-dialog", classes="modal-container"):
+            yield Label(" ✨ Add Provider ", id="dialog-title")
+            
+            with Vertical(id="dialog-body"):
+                # Preset selector
+                yield Label("[bold]Choose a preset or enter custom:[/bold]")
+                preset_options = []
+                for key, info in self.PRESETS.items():
+                    label = info["label"]
+                    if key in self._existing:
+                        label += " ✓"
+                    preset_options.append((label, key))
+                yield Select(preset_options, id="preset-select", prompt="Select preset...", value="__custom__")
+                
+                yield Label("")  # spacer
+                
+                # Manual fields
+                yield Label("Provider Name:")
+                yield Input(id="provider-name-input", placeholder="my-custom-provider")
+                
+                yield Label("Base URL:")
+                yield Input(id="provider-url-input", placeholder="https://api.example.com/v1")
+                
+                yield Label("API Key:")
+                yield Input(id="provider-key-input", password=True, placeholder="sk-... or ${ENV_VAR}")
+                
+                yield Label("Models (comma-separated):")
+                yield Input(id="provider-models-input", placeholder="gpt-4o, gpt-4o-mini")
+                
+                yield Label("Default Model:")
+                yield Input(id="provider-default-model-input", placeholder="gpt-4o")
+                
+                yield Label("[dim italic]API key can be literal or ${ENV_VAR} reference[/dim italic]")
+
+            with Horizontal(id="dialog-actions"):
+                yield Button("Cancel", variant="default", id="cancel-btn")
+                yield Button("✨ Add Provider", variant="primary", id="add-provider-btn")
+
+    def on_mount(self) -> None:
+        """Focus preset select on open."""
+        preset = self.query_one("#preset-select", Select)
+        preset.focus()
+        # Trigger initial preset (custom)
+        self._on_preset_changed("__custom__")
+
+    @on(Select.Changed, "#preset-select")
+    def _on_preset_change(self, event: Select.Changed) -> None:
+        if event.value and event.value is not Select.NULL and event.value is not Select.BLANK:
+            self._on_preset_changed(event.value)
+
+    def _on_preset_changed(self, preset_key: str) -> None:
+        """Fill form fields based on selected preset."""
+        info = self.PRESETS.get(preset_key, {})
+        
+        name_input = self.query_one("#provider-name-input", Input)
+        url_input = self.query_one("#provider-url-input", Input)
+        key_input = self.query_one("#provider-key-input", Input)
+        models_input = self.query_one("#provider-models-input", Input)
+        default_input = self.query_one("#provider-default-model-input", Input)
+        
+        if preset_key == "__custom__":
+            name_input.value = ""
+            url_input.value = ""
+            key_input.value = ""
+            models_input.value = "gpt-4o, gpt-4o-mini"
+            default_input.value = "gpt-4o"
+            name_input.disabled = False
+            url_input.disabled = False
+            models_input.disabled = False
+            default_input.disabled = False
+            key_input.disabled = False
+        else:
+            name_input.value = preset_key
+            url_input.value = info.get("base_url", "")
+            models_input.value = ", ".join(info.get("models", []))
+            default_input.value = info.get("default_model", "")
+            name_input.disabled = True
+            url_input.disabled = True
+            models_input.disabled = False  # allow editing
+            default_input.disabled = False
+            if info.get("no_api_key"):
+                key_input.value = ""
+                key_input.disabled = True
+                key_input.placeholder = "(not needed)"
+            else:
+                key_input.disabled = False
+                key_input.placeholder = "sk-... or ${ENV_VAR}"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "add-provider-btn":
+            self._save()
+
+    def _save(self) -> None:
+        """Validate and save the new provider."""
+        name = self.query_one("#provider-name-input", Input).value.strip()
+        base_url = self.query_one("#provider-url-input", Input).value.strip()
+        api_key = self.query_one("#provider-key-input", Input).value.strip()
+        models_str = self.query_one("#provider-models-input", Input).value.strip()
+        default_model = self.query_one("#provider-default-model-input", Input).value.strip()
+
+        # Validate
+        if not name:
+            self.app.notify("Provider name is required", severity="error")
+            return
+        if name in self._existing:
+            self.app.notify(f"Provider '{name}' already exists", severity="warning")
+            return
+        if not base_url:
+            self.app.notify("Base URL is required", severity="error")
+            return
+        
+        models = [m.strip() for m in models_str.split(",") if m.strip()]
+        if not models:
+            self.app.notify("At least one model is required", severity="error")
+            return
+        if not default_model:
+            default_model = models[0]
+
+        # Store in auth.json
+        from ...config.auth import get_auth_manager
+        auth = get_auth_manager()
+        # Store key if it's literal or env var reference
+        if api_key:
+            auth.set_key(name, api_key, base_url)
+
+        # Pass result via dismiss
+        self._result = {
+            "name": name,
+            "base_url": base_url,
+            "api_key": api_key,
+            "models": models,
+            "default_model": default_model,
+        }
+        self.dismiss(name)
 
 
 class HomeScreen(Screen[Any]):
@@ -433,7 +1354,22 @@ class HomeScreen(Screen[Any]):
                 ("r", "rename_session", "Rename"),
                 ("n", "new_session", "New Session"),
             ]
- 
+
+            DEFAULT_CSS = """
+            SessionPicker {
+                align: center middle;
+                background: transparent;
+            }
+            SessionPicker > Vertical {
+                width: 50;
+                height: 10;
+                max-height: 80%;
+                background: #212121;
+                border: thick #5c9cf5;
+                padding: 1 2;
+            }
+            """
+
             def __init__(self, sessions_data, agent):
                 super().__init__()
                 self.sessions_data = sessions_data
@@ -595,11 +1531,12 @@ class HomeScreen(Screen[Any]):
         for msg in session.messages:
             if msg.role == "system":
                 content = msg.content
-                response_area.write(f"\n[dim italic]{_rich_escape(content)}[/dim italic]")
+                if any(kw in content for kw in ("[Context compacted", "[Showing last", "[Session summary", "[skipped", "tool/reasoning")):
+                    response_area.write(f"\n[dim italic]{_rich_escape(content)}[/dim italic]")
+                continue
 
-            if msg.role == "tool":
-                response_area.write("\n")
-                # continue  # skip tools in clean resume mode
+            if msg.role == "tool" and resume_mode == "clean":
+                continue  # skip tools in clean resume mode
 
             # Add spacing between different user turns
             if msg.role == "user" and prev_role and prev_role != "user":
@@ -1982,6 +2919,19 @@ class HomeScreen(Screen[Any]):
 
         class RenameDialog(ModalScreen[str | None]):
             BINDINGS = [("escape", "dismiss_none", "Cancel")]
+            DEFAULT_CSS = """
+            RenameDialog {
+                align: center middle;
+                background: transparent;
+            }
+            RenameDialog > Vertical {
+                width: 50;
+                height: auto;
+                background: #212121;
+                border: thick #5c9cf5;
+                padding: 1 2;
+            }
+            """
             def __init__(self, prompt: str, default: str):
                 super().__init__()
                 self._prompt = prompt

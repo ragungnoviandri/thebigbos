@@ -328,7 +328,7 @@ DialogSelect > Center {
    ══════════════════════════════════════════════════════════ */
 #settings-dialog {
     width: 60;
-    max-width: 70;
+    max-width: 70%;
     height: auto;
     max-height: 80%;
     background: #1a1a2e;
