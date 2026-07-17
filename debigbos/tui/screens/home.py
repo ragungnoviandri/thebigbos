@@ -556,18 +556,19 @@ class HomeScreen(Screen[Any]):
         if not content.strip() and role != "assistant":
             return ""
 
-        limits = {"user": 1000, "assistant": 4000, "reasoning": 800, "tool": 200}
+        # No limit for assistant — keep full response including build info at end
+        limits = {"user": 1000, "assistant": None, "reasoning": 800, "tool": 200}
         limit = limits.get(role, 2000)
 
         if role == "user":
-            escaped = _rich_escape(content[:limit])
+            escaped = _rich_escape(content[:limit] if limit else content)
             return (
                 f"[dim]──[/dim]\n"
                 f"[bold cyan]▸ User :[/bold cyan] {escaped}"
             )
 
         if role == "reasoning":
-            escaped = _rich_escape(content[:limit])
+            escaped = _rich_escape(content[:limit] if limit else content)
             return (
                 f"[dim]────[/dim]\n"
                 f"[bold #fab283]💭 Thought :[/bold #fab283]\n"
@@ -575,11 +576,12 @@ class HomeScreen(Screen[Any]):
             )
 
         if role == "tool":
-            escaped = _rich_escape(content[:limit])
+            escaped = _rich_escape(content[:limit] if limit else content)
             name = msg.name or "tool"
             return (
                 f"[dim]────[/dim]\n"
-                f"[bold yellow]🛠 Tool ({name}) :[/bold yellow]\n"
+                f"[bold yellow]🛠 Tools :[/bold yellow]\n"
+                f"  [dim]{name}[/dim]\n"
                 f"  [dim]{escaped}[/dim]"
             )
 
@@ -600,10 +602,21 @@ class HomeScreen(Screen[Any]):
             )
             parts.append(f"[bold yellow]⚙ Tools :[/bold yellow]\n{tools_str}")
 
-        # 3. Main content as Summary
+        # 3. Main content as Summary (no truncation)
         if content.strip():
-            c = _rich_escape(content[:limit])
+            c = _rich_escape(content)
             parts.append(f"[bold green]📋 Summary :[/bold green]\n{c}")
+
+        # 4. Timing info (if available in metadata)
+        duration = getattr(msg, "duration", None)
+        tokens = getattr(msg, "tokens", None)
+        if duration or tokens:
+            timing_parts = []
+            if duration:
+                timing_parts.append(f"⏱ {duration:.1f}s")
+            if tokens:
+                timing_parts.append(f"🔢 {tokens} tokens")
+            parts.append(f"[dim]{' · '.join(timing_parts)}[/dim]")
 
         return sep.join(parts) if parts else ""
 

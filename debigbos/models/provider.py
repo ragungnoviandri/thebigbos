@@ -31,6 +31,8 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
+    duration: float = 0.0
+    tokens: int = 0
 
 
 @dataclass

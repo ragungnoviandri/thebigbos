@@ -627,10 +627,13 @@ class BigBosAgent:
 
             # Don't save error responses as history — they poison resumed sessions
             if response.content and response.finish_reason != "error":
+                duration = time.time() - step_start
+                tokens = response.usage.get("total", 0) if response.usage else 0
                 self.memory.save_message(session.id, "assistant", response.content,
                                          tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
                                                      for tc in response.tool_calls] if response.tool_calls else None,
-                                         reasoning_content=response.reasoning_content or None)
+                                         reasoning_content=response.reasoning_content or None,
+                                         duration=duration, tokens=tokens)
                 self._emit("response", response.content)
                 final_response += response.content
             elif response.content and response.finish_reason == "error":
@@ -725,12 +728,17 @@ class BigBosAgent:
             if self.state.step_count > 1:
                 self._emit("thinking", "")
 
+            # Track timing for this model call
+            step_start = time.time()
+
             try:
                 response = await provider.chat(session.to_llm_format(), tool_schemas, options)
             except Exception as e:
                 self._emit("api_error", str(e)[:200])
                 yield f"\n[Error: {e}]"
                 break
+
+            step_duration = time.time() - step_start
 
             # Track cost from usage
             if response.usage:
@@ -749,6 +757,12 @@ class BigBosAgent:
                 yield response.content
                 break  # Don't save error responses — they poison resumed sessions
 
+            # Track cumulative duration and tokens
+            if not hasattr(self, '_response_start_time'):
+                self._response_start_time = step_start
+            cumulative_duration = time.time() - self._response_start_time
+            tokens = response.usage.get("total", 0) if response.usage else 0
+
             # —— Reasoning first (emitted via event, NOT yielded to avoid double render) ——
             if response.reasoning_content:
                 self._emit("reasoning", response.reasoning_content[:800])
@@ -760,7 +774,8 @@ class BigBosAgent:
                 self.memory.save_message(session.id, "assistant", response.content,
                                          tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
                                                      for tc in response.tool_calls] if response.tool_calls else None,
-                                         reasoning_content=response.reasoning_content or None)
+                                         reasoning_content=response.reasoning_content or None,
+                                         duration=cumulative_duration, tokens=tokens)
                 yield response.content
             elif not response.reasoning_content:
                 # Neither content nor reasoning — model might have returned empty
@@ -772,10 +787,13 @@ class BigBosAgent:
                 reasoning_content=response.reasoning_content,
                 tool_calls=response.tool_calls,
             )
+            assistant_msg.duration = cumulative_duration
+            assistant_msg.tokens = tokens
             session.add_message(assistant_msg)
 
-            if not response.tool_calls:
-                break
+            # Reset timer after first successful response
+            if not hasattr(self, '_response_start_time'):
+                self._response_start_time = step_start
 
             for tc in response.tool_calls:
                 self._emit("tool_executing", json.dumps([{"name": tc.name, "args": tc.arguments}]))

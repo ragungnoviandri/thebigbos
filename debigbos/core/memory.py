@@ -68,6 +68,8 @@ class MemoryManager:
                 tool_call_id TEXT,
                 name TEXT,
                 reasoning_content TEXT DEFAULT '',
+                duration REAL DEFAULT 0.0,
+                tokens INTEGER DEFAULT 0,
                 timestamp REAL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
@@ -94,6 +96,16 @@ class MemoryManager:
             self.conn.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT DEFAULT ''")
         except Exception:
             pass  # Column already exists
+        # Migration: add duration column for existing databases
+        try:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN duration REAL DEFAULT 0.0")
+        except Exception:
+            pass
+        # Migration: add tokens column for existing databases
+        try:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN tokens INTEGER DEFAULT 0")
+        except Exception:
+            pass
         # Migration: add cost column for existing databases
         try:
             self.conn.execute("ALTER TABLE sessions ADD COLUMN cost REAL DEFAULT 0.0")
@@ -162,13 +174,14 @@ class MemoryManager:
 
     def save_message(self, session_id: str, role: str, content: str,
                      tool_calls: list | None = None, tool_call_id: str | None = None,
-                     name: str | None = None, reasoning_content: str | None = None) -> None:
+                     name: str | None = None, reasoning_content: str | None = None,
+                     duration: float = 0.0, tokens: int = 0) -> None:
         """Save a single message to the session."""
         self.conn.execute(
-            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, name, reasoning_content, timestamp) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, name, reasoning_content, duration, tokens, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, role, content, json.dumps(tool_calls or []),
-             tool_call_id, name, reasoning_content or "", time.time()),
+             tool_call_id, name, reasoning_content or "", duration, tokens, time.time()),
         )
         self.conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -179,7 +192,7 @@ class MemoryManager:
     def load_messages(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Load messages for a session."""
         rows = self.conn.execute(
-            "SELECT role, content, tool_calls, tool_call_id, name, reasoning_content FROM messages "
+            "SELECT role, content, tool_calls, tool_call_id, name, reasoning_content, duration, tokens FROM messages "
             "WHERE session_id = ? ORDER BY id ASC LIMIT ?",
             (session_id, limit),
         ).fetchall()
@@ -191,6 +204,8 @@ class MemoryManager:
                 "tool_call_id": row[3],
                 "name": row[4],
                 "reasoning_content": row[5] or "",
+                "duration": row[6] or 0.0,
+                "tokens": row[7] or 0,
             }
             for row in rows
         ]
