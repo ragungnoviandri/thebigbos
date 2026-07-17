@@ -88,6 +88,7 @@ exec "$TB_HOME/venv/bin/python" -m debigbos "$@"
 WRAPPER
 chmod +x "$INSTALL_DIR/bin/deBigBos"
 ln -sf "$INSTALL_DIR/bin/deBigBos" "$BIN_DIR/deBigBos"
+ln -sf "$INSTALL_DIR/bin/deBigBos" "$BIN_DIR/debigbos"
 echo "  Wrapper: $BIN_DIR/deBigBos"
 
 # 6. Default config + skills

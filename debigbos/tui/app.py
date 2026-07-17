@@ -37,7 +37,6 @@ class BigBosApp(App[Any]):
     TITLE = "de BigBos.agent"
     
     CSS_PATH = "styles.tcss"
-    """
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False),
