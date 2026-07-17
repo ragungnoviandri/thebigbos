@@ -32,28 +32,6 @@ from ... import get_version_string
 class SettingsDialog(ModalScreen[None]):
     """Settings dialog with General + Skills tabs."""
 
-    DEFAULT_CSS = """
-    #settings-dialog {
-        width: 80%;
-        height: auto;
-        border: solid green;
-        background: $surface;
-        padding: 1;
-    }
-    #settings-actions {
-        width: 100%;
-        height: auto;
-        align-horizontal: right;
-        margin-top: 1;
-    }
-    #settings-actions Button {
-        margin-left: 1;
-    }
-    .provider-row {
-        padding: 0 1;
-    }
-    """
-
     BINDINGS = [("escape", "close", "Close"), ("q", "close", "Close")]
 
     def __init__(self, home_screen: Any):

@@ -327,13 +327,20 @@ DialogSelect > Center {
    SETTINGS DIALOG
    ══════════════════════════════════════════════════════════ */
 #settings-dialog {
-    width: 60;
-    max-width: 70%;
+    width: 80%;
     height: auto;
-    max-height: 80%;
-    background: #1a1a2e;
-    border: thick #5c9cf5;
+    border: solid green;
+    background: $surface;
     padding: 1;
+}
+#settings-actions {
+    width: 100%;
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+#settings-actions Button {
+    margin-left: 1;
 }
 #settings-dialog .skill-row {
     border-bottom: solid #333;
